@@ -1,0 +1,1041 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Will It Evolve Into Final Form?</title>
+<style>
+  /* ---------- Page shell: black, no scrolling, stage centered ---------- */
+  html, body {
+    margin: 0; height: 100%; background: #000; overflow: hidden;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+
+  /* The stage is sized by JS to a 9:16 (or taller) portrait box.
+     --u = CSS pixels per logical unit (logical width is 540). */
+  #stage { position: relative; --u: 1px; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  /* ---------- Corner counter ---------- */
+  #stats {
+    position: absolute;
+    left: calc(var(--u) * 14);
+    top: calc(env(safe-area-inset-top, 0px) + var(--u) * 12);
+    font: 800 calc(var(--u) * 13) / 1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: #fff; letter-spacing: 0.06em; pointer-events: none;
+    text-shadow: 0 0 calc(var(--u) * 6) rgba(255, 255, 255, 0.6);
+  }
+  #stats b { color: #FFD54A; text-shadow: 0 0 calc(var(--u) * 8) #FFB300; }
+
+  /* ---------- Buttons (mute / settings) ---------- */
+  #btns {
+    position: absolute;
+    right: calc(var(--u) * 12);
+    top: calc(env(safe-area-inset-top, 0px) + var(--u) * 10);
+    display: flex; gap: calc(var(--u) * 8);
+  }
+  .iconBtn {
+    width: calc(var(--u) * 38); height: calc(var(--u) * 38);
+    border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.06); color: #fff; cursor: pointer;
+    font-size: calc(var(--u) * 17); line-height: 1; padding: 0;
+    box-shadow: 0 0 calc(var(--u) * 10) rgba(255, 255, 255, 0.25);
+  }
+
+  /* ---------- Settings panel ---------- */
+  #panel {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: calc(var(--u) * 380); padding: calc(var(--u) * 20);
+    background: rgba(8, 8, 18, 0.94); border: 2px solid #7B61FF; border-radius: calc(var(--u) * 18);
+    box-shadow: 0 0 calc(var(--u) * 24) rgba(123, 97, 255, 0.7);
+    color: #fff; font: 600 calc(var(--u) * 15) system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  #panel[hidden] { display: none; }
+  #panel h2 { margin: 0 0 calc(var(--u) * 14); font-size: calc(var(--u) * 20); text-align: center; letter-spacing: 0.08em; }
+  #panel label { display: block; margin-bottom: calc(var(--u) * 14); }
+  #panel label span { float: right; color: #FFD54A; }
+  #panel input[type=range] { width: 100%; margin-top: calc(var(--u) * 6); accent-color: #7B61FF; }
+  .row { display: flex; gap: calc(var(--u) * 10); margin-top: calc(var(--u) * 6); }
+  .row button {
+    flex: 1; padding: calc(var(--u) * 10); border-radius: calc(var(--u) * 10); cursor: pointer;
+    font: 800 calc(var(--u) * 15) system-ui, sans-serif; color: #fff; background: transparent;
+  }
+  #resetBtn { border: 2px solid #FF4D6D; box-shadow: 0 0 calc(var(--u) * 10) rgba(255, 77, 109, 0.6); }
+  #closeBtn { border: 2px solid #4D9DFF; box-shadow: 0 0 calc(var(--u) * 10) rgba(77, 157, 255, 0.6); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+
+  <div id="stats">
+    <div>EVOLUTIONS <b id="sEvo">0</b></div>
+    <div>FINAL FORMS <b id="sFinal">0</b></div>
+    <div>MEGAS <b id="sMega">0</b></div>
+  </div>
+
+  <div id="btns">
+    <button class="iconBtn" id="muteBtn" aria-label="Toggle sound">🔊</button>
+    <button class="iconBtn" id="setBtn" aria-label="Settings">⚙️</button>
+  </div>
+
+  <div id="panel" hidden>
+    <h2>SETTINGS</h2>
+    <label>Spawn every <span id="vSpawn"></span>
+      <input id="inSpawn" type="range" min="0.2" max="2" step="0.05">
+    </label>
+    <label>Gravity <span id="vGrav"></span>
+      <input id="inGrav" type="range" min="200" max="2000" step="50">
+    </label>
+    <label>Bounciness <span id="vBounce"></span>
+      <input id="inBounce" type="range" min="0.1" max="0.95" step="0.05">
+    </label>
+    <div class="row">
+      <button id="resetBtn">RESET</button>
+      <button id="closeBtn">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   CONFIG
+   ===================================================================== */
+
+const TAU = Math.PI * 2;
+const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
+const TYPE_COLORS = {
+  Fire: '#FF6B35', Water: '#4D9DFF', Grass: '#4CD964', Electric: '#FFD60A',
+  Psychic: '#FF4DA6', Dragon: '#7B61FF', Ghost: '#9B59B6',
+};
+
+// Physics radius (logical units) per evolution stage. Stage 4 = Mega.
+const STAGE_RADIUS = { 1: 22, 2: 31, 3: 42, 4: 56 };
+
+/* Every Pokémon is one config object.
+   - next:     id this evolves into when two of the same touch (null = never)
+   - imageUrl: optional sprite URL; if set, it is drawn clipped inside the orb
+               instead of the name text (must allow CORS or be same-origin).
+   - color:    optional override; defaults to the type color. */
+const POKEMON = [
+  { id: 'charmander',  name: 'Charmander',     type: 'Fire',     stage: 1, next: 'charmeleon',    imageUrl: null },
+  { id: 'charmeleon',  name: 'Charmeleon',     type: 'Fire',     stage: 2, next: 'charizard',     imageUrl: null },
+  { id: 'charizard',   name: 'Charizard',      type: 'Fire',     stage: 3, next: 'mega-charizard', imageUrl: null },
+  { id: 'mega-charizard', name: 'MEGA Charizard', type: 'Fire',  stage: 4, next: null, mega: true, imageUrl: null },
+
+  { id: 'squirtle',    name: 'Squirtle',       type: 'Water',    stage: 1, next: 'wartortle',     imageUrl: null },
+  { id: 'wartortle',   name: 'Wartortle',      type: 'Water',    stage: 2, next: 'blastoise',     imageUrl: null },
+  { id: 'blastoise',   name: 'Blastoise',      type: 'Water',    stage: 3, next: 'mega-blastoise', imageUrl: null },
+  { id: 'mega-blastoise', name: 'MEGA Blastoise', type: 'Water', stage: 4, next: null, mega: true, imageUrl: null },
+
+  { id: 'bulbasaur',   name: 'Bulbasaur',      type: 'Grass',    stage: 1, next: 'ivysaur',       imageUrl: null },
+  { id: 'ivysaur',     name: 'Ivysaur',        type: 'Grass',    stage: 2, next: 'venusaur',      imageUrl: null },
+  { id: 'venusaur',    name: 'Venusaur',       type: 'Grass',    stage: 3, next: 'mega-venusaur', imageUrl: null },
+  { id: 'mega-venusaur', name: 'MEGA Venusaur', type: 'Grass',   stage: 4, next: null, mega: true, imageUrl: null },
+
+  { id: 'pichu',       name: 'Pichu',          type: 'Electric', stage: 1, next: 'pikachu',       imageUrl: null },
+  { id: 'pikachu',     name: 'Pikachu',        type: 'Electric', stage: 2, next: 'raichu',        imageUrl: null },
+  { id: 'raichu',      name: 'Raichu',         type: 'Electric', stage: 3, next: 'mega-raichu',   imageUrl: null },
+  { id: 'mega-raichu', name: 'MEGA Raichu',    type: 'Electric', stage: 4, next: null, mega: true, imageUrl: null },
+
+  { id: 'gastly',      name: 'Gastly',         type: 'Ghost',    stage: 1, next: 'haunter',       imageUrl: null },
+  { id: 'haunter',     name: 'Haunter',        type: 'Ghost',    stage: 2, next: 'gengar',        imageUrl: null },
+  { id: 'gengar',      name: 'Gengar',         type: 'Ghost',    stage: 3, next: 'mega-gengar',   imageUrl: null },
+  { id: 'mega-gengar', name: 'MEGA Gengar',    type: 'Ghost',    stage: 4, next: null, mega: true, imageUrl: null },
+
+  { id: 'dratini',     name: 'Dratini',        type: 'Dragon',   stage: 1, next: 'dragonair',     imageUrl: null },
+  { id: 'dragonair',   name: 'Dragonair',      type: 'Dragon',   stage: 2, next: 'dragonite',     imageUrl: null },
+  { id: 'dragonite',   name: 'Dragonite',      type: 'Dragon',   stage: 3, next: 'mega-dragonite', imageUrl: null },
+  { id: 'mega-dragonite', name: 'MEGA Dragonite', type: 'Dragon', stage: 4, next: null, mega: true, imageUrl: null },
+];
+
+// Lookup table with derived fields (color, radius, loaded image).
+const DEX = {};
+for (const p of POKEMON) {
+  DEX[p.id] = { ...p, color: p.color || TYPE_COLORS[p.type], r: STAGE_RADIUS[p.stage], img: null };
+}
+const STARTERS = Object.values(DEX).filter(p => p.stage === 1);
+
+// Load optional sprite images; invalidate the cached orb once each arrives.
+for (const def of Object.values(DEX)) {
+  if (!def.imageUrl) continue;
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => { def.img = img; sprites.delete(def.id); };
+  img.src = def.imageUrl;
+}
+
+// User-tweakable settings (bound to the sliders).
+const Settings = { spawnInterval: 0.8, gravity: 900, bounce: 0.72 };
+
+/* =====================================================================
+   CANVAS, SIZING & LAYOUT
+   ===================================================================== */
+
+const stage = document.getElementById('stage');
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const LW = 540;   // logical width; everything is laid out in these units
+let LH = 960;     // logical height (grows on phones taller than 9:16)
+let scale = 1;    // device pixels per logical unit
+const L = {};     // arena layout
+
+function layout() {
+  L.cx = LW / 2;
+  L.R = 240;                          // inner radius of the ring (collision surface)
+  L.cy = LH / 2 + 60;
+  L.hw = 30;                          // half-width of the chute
+  L.chuteTop = L.cy - L.R - 105;
+  L.gapY = L.cy - Math.sqrt(L.R * L.R - L.hw * L.hw);  // where the chute meets the ring
+  L.title1 = L.chuteTop - 100;
+  L.title2 = L.chuteTop - 52;
+}
+
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  let cssW, cssH;
+  if (wh / ww >= 16 / 9) {            // tall phone: fill the whole screen
+    cssW = ww; cssH = wh; LH = LW * wh / ww;
+  } else {                            // wider screen: 9:16 box, letterboxed in black
+    cssH = wh; cssW = wh * 9 / 16; LH = 960;
+  }
+  stage.style.width = cssW + 'px';
+  stage.style.height = cssH + 'px';
+  stage.style.setProperty('--u', (cssW / LW) + 'px');
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);   // cap for phone performance
+  scale = (cssW / LW) * dpr;
+  canvas.width = Math.round(LW * scale);
+  canvas.height = Math.round(LH * scale);
+
+  // Keep existing balls in place relative to the arena.
+  const oldCy = L.cy;
+  layout();
+  if (oldCy !== undefined) for (const b of S.balls) b.y += L.cy - oldCy;
+
+  sprites.clear();                    // orbs are cached at device resolution
+}
+
+// shadowBlur ignores the canvas transform, so scale it manually.
+const blur = v => v * scale;
+
+/* =====================================================================
+   HELPERS
+   ===================================================================== */
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[(Math.random() * arr.length) | 0];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeOutBack = t => 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2);
+
+function rgba(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+// Set a font that fits `text` into maxW, starting from maxSize.
+function fitFont(g, text, maxW, maxSize, weight) {
+  let size = maxSize;
+  g.font = `${weight} ${size}px ${FONT}`;
+  const w = g.measureText(text).width;
+  if (w > maxW) {
+    size = Math.max(5, size * maxW / w);
+    g.font = `${weight} ${size}px ${FONT}`;
+  }
+  return size;
+}
+
+/* =====================================================================
+   SOUND (Web Audio, synthesized)
+   ===================================================================== */
+
+// Major pentatonic, two octaves: every wall hit sounds musical.
+const PENTA = [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5, 1174.66, 1318.51, 1567.98, 1760.0];
+
+const Sound = {
+  ctx: null, out: null, muted: false, lastBlip: 0,
+
+  // Must be called from a user gesture (autoplay rules).
+  unlock() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      this.ctx = new AC();
+      const comp = this.ctx.createDynamicsCompressor();
+      this.out = this.ctx.createGain();
+      this.out.gain.value = this.muted ? 0 : 0.6;
+      this.out.connect(comp);
+      comp.connect(this.ctx.destination);
+    }
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+  },
+
+  setMuted(m) {
+    this.muted = m;
+    if (this.out) this.out.gain.setTargetAtTime(m ? 0 : 0.6, this.ctx.currentTime, 0.02);
+  },
+
+  get ready() { return this.ctx && !this.muted && this.ctx.state === 'running'; },
+
+  // One enveloped oscillator note.
+  note(freq, when, dur, type = 'sine', vol = 0.2, attack = 0.005) {
+    const c = this.ctx, t = c.currentTime + when;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.out);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+
+  // Wall bounce: pitch picked by the angle where the ball hit the ring.
+  blip(angle, strength) {
+    if (!this.ready) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastBlip < 0.045) return;     // throttle so piles don't buzz
+    this.lastBlip = now;
+    const idx = Math.floor(((angle + Math.PI) / TAU) * PENTA.length) % PENTA.length;
+    this.note(PENTA[idx], 0, 0.22, 'triangle', 0.03 + 0.09 * strength);
+  },
+
+  // Rising chime; higher stages start higher.
+  evolve(stage) {
+    if (!this.ready) return;
+    const base = stage >= 3 ? 4 : 2;
+    [0, 2, 4].forEach((k, i) => {
+      const f = PENTA[Math.min(base + k, PENTA.length - 1)];
+      this.note(f, i * 0.06, 0.35, 'sine', 0.16);
+      this.note(f * 2, i * 0.06, 0.2, 'triangle', 0.04);
+    });
+  },
+
+  chord(freqs, dur, vol, stagger = 0.03) {
+    freqs.forEach((f, i) => {
+      this.note(f, i * stagger, dur, 'triangle', vol, 0.02);
+      this.note(f * 1.003, i * stagger, dur, 'sine', vol * 0.6, 0.02);  // slight detune = shimmer
+    });
+  },
+
+  finalForm() {
+    if (!this.ready) return;
+    this.chord([261.63, 329.63, 392.0, 523.25, 659.25], 1.6, 0.11);
+    [1046.5, 1318.51, 1567.98, 2093.0].forEach((f, i) => this.note(f, 0.25 + i * 0.07, 0.4, 'sine', 0.05));
+  },
+
+  mega() {
+    if (!this.ready) return;
+    // Low boom sweep
+    const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(140, t);
+    o.frequency.exponentialRampToValueAtTime(38, t + 0.9);
+    g.gain.setValueAtTime(0.5, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
+    o.connect(g); g.connect(this.out); o.start(t); o.stop(t + 1.2);
+    // Big stacked chord
+    this.chord([130.81, 196.0, 261.63, 329.63, 392.0, 523.25, 659.25, 783.99], 3.0, 0.08, 0.05);
+  },
+
+  overflow() {
+    if (!this.ready) return;
+    [880, 698.46, 554.37, 440].forEach((f, i) => this.note(f, i * 0.12, 0.25, 'square', 0.05));
+  },
+};
+
+/* =====================================================================
+   SIMULATION STATE
+   ===================================================================== */
+
+const S = {
+  balls: [], pending: [], fx: [],
+  flash: 0, banner: null,
+  slowmo: 0,          // real seconds of slow motion left
+  spawnT: 0,          // sim seconds until the next chute spawn
+  overflowT: 0,       // sim seconds the chute has been blocked
+  resetT: 0,          // real seconds until auto-reset after OVERFLOW
+  time: 0, acc: 0,
+  evolutions: 0, finals: 0, megas: 0,
+  tapped: false,
+};
+
+let nextBallId = 1;
+function makeBall(def, x, y, vx = 0, vy = 0) {
+  return { id: nextBallId++, def, x, y, vx, vy, r: def.r, m: def.r * def.r,
+           age: 0, pop: 0, dead: false, kicked: false };
+}
+
+function resetSim() {
+  S.balls.length = 0; S.pending.length = 0; S.fx.length = 0;
+  S.flash = 0; S.banner = null; S.slowmo = 0;
+  S.spawnT = 0.3; S.overflowT = 0; S.resetT = 0;
+  S.evolutions = S.finals = S.megas = 0;
+}
+
+function overlapsAny(x, y, r) {
+  return S.balls.some(b => (b.x - x) ** 2 + (b.y - y) ** 2 < (b.r + r) ** 2);
+}
+
+// Drop a random stage-1 Pokémon into the top of the chute.
+function spawnFromChute() {
+  const def = pick(STARTERS);
+  const x = L.cx + rand(-1, 1) * (L.hw - def.r - 1);
+  const y = L.chuteTop + def.r + 2;
+  if (overlapsAny(x, y, def.r)) return;            // chute is clogged
+  S.balls.push(makeBall(def, x, y, rand(-40, 40), rand(20, 80)));
+}
+
+// Drop a random stage-1 Pokémon wherever the user tapped.
+function spawnAt(x, y) {
+  const def = pick(STARTERS);
+  const b = makeBall(def, x, y, rand(-60, 60), rand(-30, 30));
+  b.kicked = true;
+  S.balls.push(b);
+}
+
+/* =====================================================================
+   PHYSICS
+   ===================================================================== */
+
+const STEP = 1 / 240;   // fixed physics step (4 substeps per 60fps frame)
+
+// Circle vs line segment (used for the chute walls and the gap corners).
+function collideSegment(b, x1, y1, x2, y2, e) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const t = clamp(((b.x - x1) * dx + (b.y - y1) * dy) / (dx * dx + dy * dy), 0, 1);
+  let nx = b.x - (x1 + dx * t), ny = b.y - (y1 + dy * t);
+  const d2 = nx * nx + ny * ny;
+  if (d2 >= b.r * b.r || d2 === 0) return;
+  const d = Math.sqrt(d2);
+  nx /= d; ny /= d;
+  b.x += nx * (b.r - d);
+  b.y += ny * (b.r - d);
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn < 0) { b.vx -= (1 + e) * vn * nx; b.vy -= (1 + e) * vn * ny; }
+}
+
+function collideWalls(b, e) {
+  // Chute walls (extend a bit above the chute top so nothing slips out sideways)
+  collideSegment(b, L.cx - L.hw, L.chuteTop - 60, L.cx - L.hw, L.gapY, e);
+  collideSegment(b, L.cx + L.hw, L.chuteTop - 60, L.cx + L.hw, L.gapY, e);
+
+  const dx = b.x - L.cx, dy = b.y - L.cy;
+  const inGap = Math.abs(dx) < L.hw && dy < 0;     // lined up with the chute opening
+
+  // Inside of the ring
+  const d = Math.hypot(dx, dy);
+  if (!inGap && d > L.R - b.r) {
+    const nx = dx / d, ny = dy / d;
+    b.x = L.cx + nx * (L.R - b.r);
+    b.y = L.cy + ny * (L.R - b.r);
+    const vn = b.vx * nx + b.vy * ny;
+    if (vn > 0) {
+      b.vx -= (1 + e) * vn * nx;
+      b.vy -= (1 + e) * vn * ny;
+      // a touch of tangential friction
+      const tx = -ny, ty = nx, vt = b.vx * tx + b.vy * ty;
+      b.vx -= vt * 0.02 * tx;
+      b.vy -= vt * 0.02 * ty;
+      if (vn > 140) Sound.blip(Math.atan2(dy, dx), Math.min(1, vn / 900));
+    }
+  }
+
+  // Lid above the chute so balls can't fly off-screen
+  if (inGap && b.y - b.r < L.chuteTop - 40) {
+    b.y = L.chuteTop - 40 + b.r;
+    if (b.vy < 0) b.vy *= -0.5;
+  }
+}
+
+function step(dt) {
+  const g = Settings.gravity, e = Settings.bounce;
+  const balls = S.balls;
+
+  // Integrate
+  for (const b of balls) {
+    b.vy += g * dt;
+    b.vx *= 0.9995; b.vy *= 0.9995;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.age += dt;
+    // Random sideways kick as a ball leaves the chute keeps things chaotic
+    if (!b.kicked && b.y > L.gapY + b.r) { b.kicked = true; b.vx += rand(-90, 90); }
+  }
+
+  // Ball vs ball: merge same species, otherwise mass-weighted elastic response
+  const n = balls.length, eb = e * 0.85;
+  for (let i = 0; i < n; i++) {
+    const a = balls[i];
+    if (a.dead) continue;
+    for (let j = i + 1; j < n; j++) {
+      const b = balls[j];
+      if (b.dead) continue;
+      const dx = b.x - a.x, dy = b.y - a.y, rs = a.r + b.r;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= rs * rs) continue;
+
+      if (a.def === b.def && a.def.next) { merge(a, b); break; }
+
+      const d = Math.sqrt(d2) || 0.001;
+      const nx = dx / d, ny = dy / d, overlap = rs - d;
+      const inv = 1 / (a.m + b.m);
+      a.x -= nx * overlap * b.m * inv; a.y -= ny * overlap * b.m * inv;
+      b.x += nx * overlap * a.m * inv; b.y += ny * overlap * a.m * inv;
+
+      const rv = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+      if (rv < 0) {
+        const jImp = -(1 + eb) * rv / (1 / a.m + 1 / b.m);
+        a.vx -= jImp / a.m * nx; a.vy -= jImp / a.m * ny;
+        b.vx += jImp / b.m * nx; b.vy += jImp / b.m * ny;
+      }
+    }
+  }
+
+  // Walls last so nothing ends a step outside the arena
+  for (const b of balls) if (!b.dead) collideWalls(b, e);
+
+  // Apply merges
+  if (S.pending.length || balls.some(b => b.dead)) {
+    S.balls = balls.filter(b => !b.dead).concat(S.pending);
+    S.pending.length = 0;
+  }
+}
+
+/* =====================================================================
+   EVOLUTION
+   ===================================================================== */
+
+function merge(a, b) {
+  a.dead = b.dead = true;
+  const def = DEX[a.def.next];
+  const x = (a.x + b.x) / 2, y = (a.y + b.y) / 2;
+  const nb = makeBall(def, x, y, (a.vx + b.vx) / 2, (a.vy + b.vy) / 2);
+  nb.kicked = true;
+  S.pending.push(nb);
+  S.evolutions++;
+  celebrate(def, x, y);
+}
+
+function addRing(x, y, r0, r1, color, life, width) {
+  S.fx.push({ kind: 'ring', x, y, r0, r1, color, life, max: life, width });
+}
+function addText(x, y, text, color, size, life) {
+  S.fx.push({ kind: 'text', x, y, text, color, size, life, max: life });
+}
+function addSparks(x, y, count, colors, speed) {
+  for (let i = 0; i < count; i++) {
+    const a = rand(0, TAU), s = rand(speed * 0.3, speed);
+    const life = rand(0.5, 1.0);
+    S.fx.push({ kind: 'spark', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                color: pick(colors), size: rand(1.5, 3.5), life, max: life });
+  }
+}
+
+function celebrate(def, x, y) {
+  const r = def.r;
+  // Local white pop at the merge point
+  S.fx.push({ kind: 'flash', x, y, r: r * 1.8, life: 0.18, max: 0.18 });
+
+  if (def.stage === 2) {
+    addRing(x, y, r, r * 3, def.color, 0.6, 6);
+    addSparks(x, y, 14, [def.color, '#fff'], 260);
+    addText(x, y - r - 8, 'EVOLVED!', def.color, 26, 1.1);
+    S.flash = Math.max(S.flash, 0.12);
+    Sound.evolve(2);
+  } else if (def.stage === 3) {
+    S.finals++;
+    addRing(x, y, r, r * 3.2, def.color, 0.7, 7);
+    addRing(x, y, r, r * 5, '#FFD54A', 1.0, 10);
+    addSparks(x, y, 34, ['#FFD54A', '#FFF3B0', def.color], 420);
+    addText(x, y - r - 10, 'FINAL FORM!', '#FFD54A', 36, 1.5);
+    S.flash = Math.max(S.flash, 0.35);
+    Sound.evolve(3);
+    Sound.finalForm();
+  } else if (def.stage === 4) {
+    S.megas++;
+    S.finals++;
+    for (let i = 0; i < 5; i++) {
+      addRing(x, y, r, r * (3 + i * 1.4), `hsl(${i * 72},100%,62%)`, 0.9 + i * 0.2, 12);
+    }
+    addSparks(x, y, 70, ['#FF4D4D', '#FFD54A', '#4CD964', '#4D9DFF', '#B061FF', '#fff'], 600);
+    S.flash = 0.75;
+    S.slowmo = 2.0;                                  // 30% speed for 2 real seconds
+    S.banner = { text: 'MEGA EVOLUTION!', sub: def.name, life: 2.4, max: 2.4, mega: true };
+    Sound.mega();
+  }
+}
+
+function triggerOverflow() {
+  S.resetT = 2.0;
+  S.banner = { text: 'OVERFLOW!', sub: 'resetting…', life: 2.0, max: 2.0, mega: false };
+  S.flash = 0.4;
+  Sound.overflow();
+}
+
+/* =====================================================================
+   UPDATE
+   ===================================================================== */
+
+function update(rdt) {
+  S.time += rdt;
+
+  // Real-time timers (effects stay readable during slow-mo)
+  S.slowmo = Math.max(0, S.slowmo - rdt);
+  S.flash = Math.max(0, S.flash - rdt * 2.2);
+  if (S.banner && (S.banner.life -= rdt) <= 0) S.banner = null;
+
+  if (S.resetT > 0) {
+    S.resetT -= rdt;
+    if (S.resetT <= 0) resetSim();
+  }
+
+  for (const f of S.fx) {
+    f.life -= rdt;
+    if (f.kind === 'spark') {
+      f.x += f.vx * rdt; f.y += f.vy * rdt;
+      f.vx *= 0.97; f.vy = f.vy * 0.97 + 300 * rdt;
+    }
+  }
+  S.fx = S.fx.filter(f => f.life > 0);
+
+  // Simulation time
+  const sdt = rdt * (S.slowmo > 0 ? 0.3 : 1);
+
+  // Spawning from the chute
+  if (S.resetT <= 0) {
+    S.spawnT -= sdt;
+    if (S.spawnT <= 0) {
+      S.spawnT += Settings.spawnInterval;
+      spawnFromChute();
+    }
+  }
+
+  // Fixed-step physics
+  S.acc += sdt;
+  let steps = 0;
+  while (S.acc >= STEP && steps < 10) { step(STEP); S.acc -= STEP; steps++; }
+  if (steps === 10) S.acc = 0;
+
+  for (const b of S.balls) b.pop = Math.min(1, b.pop + rdt / 0.28);
+
+  // Overflow: a settled ball stuck in the chute (above the ring) for 3s
+  if (S.resetT <= 0) {
+    const topY = L.cy - L.R;
+    const blocked = S.balls.some(b => b.age > 1.5 && b.y < topY);
+    S.overflowT = blocked ? S.overflowT + sdt : 0;
+    if (S.overflowT > 3) triggerOverflow();
+  }
+
+  updateStats();
+}
+
+/* =====================================================================
+   RENDERING
+   ===================================================================== */
+
+// Each species' orb (glow, fill, outline, labels) is pre-rendered once.
+// shadowBlur is expensive on phones; this keeps 60fps with many balls.
+const sprites = new Map();
+const SPRITE_PAD = 16;
+
+function getSprite(def) {
+  let s = sprites.get(def.id);
+  if (s) return s;
+
+  const r = def.r, size = (r + SPRITE_PAD) * 2;
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  g.scale(c.width / size, c.height / size);
+  g.translate(size / 2, size / 2);
+
+  // Dark translucent body with a soft colored sheen
+  g.beginPath(); g.arc(0, 0, r, 0, TAU);
+  g.fillStyle = 'rgba(0,0,0,0.6)';
+  g.fill();
+  const grad = g.createRadialGradient(-r * 0.3, -r * 0.35, r * 0.1, 0, 0, r);
+  grad.addColorStop(0, rgba(def.color, 0.45));
+  grad.addColorStop(1, rgba(def.color, 0.12));
+  g.fillStyle = grad;
+  g.fill();
+
+  if (def.img) {
+    // Optional sprite image clipped inside the orb
+    g.save();
+    g.beginPath(); g.arc(0, 0, r - 3, 0, TAU); g.clip();
+    const iw = def.img.naturalWidth, ih = def.img.naturalHeight;
+    const k = (2 * (r - 3)) / Math.min(iw, ih);
+    g.drawImage(def.img, -iw * k / 2, -ih * k / 2, iw * k, ih * k);
+    g.restore();
+  } else {
+    drawLabels(g, def);
+  }
+
+  // Neon outline (Megas get an animated rainbow outline drawn live instead)
+  if (!def.mega) {
+    g.beginPath(); g.arc(0, 0, r - 1.5, 0, TAU);
+    g.shadowColor = def.color;
+    g.shadowBlur = 12 * scale;
+    g.strokeStyle = def.color;
+    g.lineWidth = 3;
+    g.stroke(); g.stroke();
+    g.shadowBlur = 0;
+    g.strokeStyle = 'rgba(255,255,255,0.5)';
+    g.lineWidth = 1;
+    g.stroke();
+  }
+
+  s = { canvas: c, size };
+  sprites.set(def.id, s);
+  return s;
+}
+
+function drawLabels(g, def) {
+  const r = def.r, maxW = r * 1.8;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+
+  let name = def.name, nameY = -r * 0.06, typeY = r * 0.42;
+  if (def.mega) {
+    name = def.name.replace(/^MEGA\s+/, '');
+    fitFont(g, 'MEGA', maxW * 0.7, r * 0.3, 900);
+    g.fillStyle = '#FFD54A';
+    g.shadowColor = '#FFB300'; g.shadowBlur = 8 * scale;
+    g.fillText('MEGA', 0, -r * 0.42);
+    nameY = r * 0.04; typeY = r * 0.46;
+  }
+
+  fitFont(g, name, maxW, r * 0.46, 800);
+  g.fillStyle = '#fff';
+  g.shadowColor = def.color; g.shadowBlur = 6 * scale;
+  g.fillText(name, 0, nameY);
+
+  fitFont(g, def.type.toUpperCase(), maxW * 0.75, r * 0.24, 700);
+  g.shadowBlur = 0;
+  g.fillStyle = def.color;
+  g.fillText(def.type.toUpperCase(), 0, typeY);
+}
+
+const hasConic = typeof ctx.createConicGradient === 'function';
+
+function drawBall(b) {
+  const sp = getSprite(b.def);
+  let k = b.pop < 1 ? 0.6 + 0.4 * easeOutBack(b.pop) : 1;
+  if (b.def.mega) k *= 1 + 0.05 * Math.sin(S.time * 6 + b.id);   // Mega pulse
+
+  const size = sp.size * k;
+  ctx.drawImage(sp.canvas, b.x - size / 2, b.y - size / 2, size, size);
+
+  if (b.def.mega) drawMegaOutline(b, k);
+}
+
+function drawMegaOutline(b, k) {
+  const r = b.r * k, hue = (S.time * 140 + b.id * 40) % 360;
+  ctx.save();
+  // Golden aura
+  ctx.globalCompositeOperation = 'lighter';
+  const aura = ctx.createRadialGradient(b.x, b.y, r * 0.8, b.x, b.y, r * 1.6);
+  aura.addColorStop(0, 'rgba(255,213,74,0.25)');
+  aura.addColorStop(1, 'rgba(255,213,74,0)');
+  ctx.fillStyle = aura;
+  ctx.beginPath(); ctx.arc(b.x, b.y, r * 1.6, 0, TAU); ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+
+  // Spinning rainbow ring
+  let stroke = `hsl(${hue},100%,60%)`;
+  if (hasConic) {
+    stroke = ctx.createConicGradient(S.time * 3, b.x, b.y);
+    for (let i = 0; i <= 6; i++) stroke.addColorStop(i / 6, `hsl(${i * 60},100%,60%)`);
+  }
+  ctx.beginPath(); ctx.arc(b.x, b.y, r - 2, 0, TAU);
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = stroke;
+  ctx.shadowColor = `hsl(${hue},100%,60%)`;
+  ctx.shadowBlur = blur(22);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawTitle() {
+  const hue = (S.time * 25) % 360;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = `hsl(${hue},100%,60%)`;
+  ctx.shadowBlur = blur(18);
+
+  fitFont(ctx, 'Will It Evolve', 500, 46, 900);
+  ctx.fillStyle = '#fff';
+  ctx.fillText('Will It Evolve', L.cx, L.title1);
+
+  fitFont(ctx, 'Into Final Form?', 500, 46, 900);
+  const gold = ctx.createLinearGradient(0, L.title2 - 22, 0, L.title2 + 22);
+  gold.addColorStop(0, '#FFF3B0');
+  gold.addColorStop(1, '#FFB300');
+  ctx.fillStyle = gold;
+  ctx.shadowColor = '#FFB300';
+  ctx.fillText('Into Final Form?', L.cx, L.title2);
+  ctx.restore();
+}
+
+function drawArena() {
+  const RW = 12;                       // ring thickness
+  const rr = L.R + RW / 2;             // stroke centerline so the inner edge = L.R
+  const hx = L.hw + RW / 2;
+  const ga = Math.asin(hx / rr);       // half-angle of the gap
+  const joinY = L.cy - rr * Math.cos(ga);
+  const hue = (S.time * 30) % 360;
+
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+
+  // One path: left chute wall → around the ring (long way) → right chute wall
+  ctx.beginPath();
+  ctx.moveTo(L.cx - hx, L.chuteTop);
+  ctx.lineTo(L.cx - hx, joinY);
+  ctx.arc(L.cx, L.cy, rr, -Math.PI / 2 - ga, -Math.PI / 2 + ga, true);
+  ctx.lineTo(L.cx + hx, L.chuteTop);
+
+  // Outer glow tube
+  ctx.strokeStyle = `hsl(${hue},100%,58%)`;
+  ctx.shadowColor = `hsl(${hue},100%,55%)`;
+  ctx.shadowBlur = blur(30);
+  ctx.lineWidth = RW;
+  ctx.stroke();
+  // Bright core
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = `hsl(${hue},100%,85%)`;
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawFx() {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  for (const f of S.fx) {
+    const t = 1 - f.life / f.max;      // 0 → 1 over the effect's life
+
+    if (f.kind === 'ring') {
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = f.color;
+      ctx.shadowColor = f.color;
+      ctx.shadowBlur = blur(16);
+      ctx.lineWidth = f.width * (1 - t) + 1;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r0 + (f.r1 - f.r0) * easeOut(t), 0, TAU);
+      ctx.stroke();
+    } else if (f.kind === 'spark') {
+      ctx.globalAlpha = 1 - t;
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = f.color;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.size, 0, TAU); ctx.fill();
+    } else if (f.kind === 'flash') {
+      ctx.globalAlpha = (1 - t) * 0.9;
+      ctx.shadowBlur = 0;
+      const g = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r);
+      g.addColorStop(0, '#fff');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, TAU); ctx.fill();
+    }
+  }
+
+  // Floating text drawn normally so it stays legible
+  ctx.globalCompositeOperation = 'source-over';
+  for (const f of S.fx) {
+    if (f.kind !== 'text') continue;
+    const t = 1 - f.life / f.max;
+    const pop = t < 0.15 ? 0.6 + 0.4 * easeOutBack(t / 0.15) : 1;
+    ctx.globalAlpha = t < 0.7 ? 1 : (1 - t) / 0.3;
+    ctx.font = `900 ${f.size * pop}px ${FONT}`;
+    const y = f.y - 55 * easeOut(t);
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.shadowBlur = 0;
+    ctx.strokeText(f.text, f.x, y);
+    ctx.fillStyle = f.color;
+    ctx.shadowColor = f.color;
+    ctx.shadowBlur = blur(14);
+    ctx.fillText(f.text, f.x, y);
+  }
+  ctx.restore();
+}
+
+function drawBanner() {
+  const B = S.banner;
+  if (!B) return;
+  const t = 1 - B.life / B.max;
+  const fadeOut = Math.min(1, B.life / 0.4);
+  const pop = t < 0.12 ? 0.3 + 0.7 * easeOutBack(t / 0.12) : 1;
+  const y = L.cy - 30;
+
+  ctx.save();
+  ctx.globalAlpha = fadeOut;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.translate(L.cx, y);
+  ctx.scale(pop, pop);
+
+  // Dark band behind the text
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(-LW / 2, -48, LW, 112);
+
+  fitFont(ctx, B.text, 500, 60, 900);
+  let fill;
+  if (B.mega) {
+    fill = ctx.createLinearGradient(-250, 0, 250, 0);
+    const shift = S.time * 120;
+    for (let i = 0; i <= 6; i++) fill.addColorStop(i / 6, `hsl(${(i * 60 + shift) % 360},100%,62%)`);
+    ctx.shadowColor = '#fff';
+  } else {
+    const on = Math.floor(S.time * 8) % 2 === 0;
+    fill = on ? '#FF3B5C' : '#FF8FA3';
+    ctx.shadowColor = '#FF3B5C';
+  }
+  ctx.shadowBlur = blur(24);
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+  ctx.strokeText(B.text, 0, 0);
+  ctx.fillStyle = fill;
+  ctx.fillText(B.text, 0, 0);
+
+  if (B.sub) {
+    fitFont(ctx, B.sub, 440, 26, 800);
+    ctx.shadowBlur = blur(10);
+    ctx.fillStyle = B.mega ? '#FFD54A' : '#fff';
+    ctx.fillText(B.sub, 0, 44);
+  }
+  ctx.restore();
+}
+
+function drawHint() {
+  if (S.tapped) return;
+  ctx.save();
+  ctx.globalAlpha = 0.55 + 0.35 * Math.sin(S.time * 3);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  fitFont(ctx, 'TAP TO ENABLE SOUND', 480, 18, 800);
+  ctx.fillText('TAP TO ENABLE SOUND', L.cx, L.cy + L.R + 48);
+  fitFont(ctx, 'tap inside the ring to drop a Pokémon', 480, 15, 600);
+  ctx.fillText('tap inside the ring to drop a Pokémon', L.cx, L.cy + L.R + 74);
+  ctx.restore();
+}
+
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+
+  drawTitle();
+  drawArena();
+  for (const b of S.balls) drawBall(b);
+  drawFx();
+
+  if (S.flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${S.flash})`;
+    ctx.fillRect(0, 0, LW, LH);
+  }
+  drawBanner();
+  drawHint();
+}
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+const statEls = { evo: $('sEvo'), fin: $('sFinal'), mega: $('sMega') };
+const lastStats = { evo: -1, fin: -1, mega: -1 };
+
+function updateStats() {
+  const vals = { evo: S.evolutions, fin: S.finals, mega: S.megas };
+  for (const k in vals) {
+    if (vals[k] !== lastStats[k]) { statEls[k].textContent = vals[k]; lastStats[k] = vals[k]; }
+  }
+}
+
+// Tap inside the ring = manual drop (also unlocks audio)
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  Sound.unlock();
+  S.tapped = true;
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width * LW;
+  const y = (e.clientY - rect.top) / rect.height * LH;
+  const r1 = STAGE_RADIUS[1];
+  if (Math.hypot(x - L.cx, y - L.cy) < L.R - r1 && S.resetT <= 0) spawnAt(x, y);
+});
+
+// Any first interaction anywhere also unlocks audio
+window.addEventListener('pointerdown', () => { Sound.unlock(); S.tapped = true; }, { capture: true });
+
+const muteBtn = $('muteBtn');
+function toggleMute() {
+  Sound.setMuted(!Sound.muted);
+  muteBtn.textContent = Sound.muted ? '🔇' : '🔊';
+}
+muteBtn.addEventListener('click', toggleMute);
+
+const panel = $('panel');
+$('setBtn').addEventListener('click', () => { panel.hidden = !panel.hidden; });
+$('closeBtn').addEventListener('click', () => { panel.hidden = true; });
+$('resetBtn').addEventListener('click', () => { resetSim(); panel.hidden = true; });
+
+// Bind a slider to a Settings key with a formatted readout
+function bindSlider(inputId, labelId, key, fmt) {
+  const input = $(inputId), label = $(labelId);
+  input.value = Settings[key];
+  label.textContent = fmt(Settings[key]);
+  input.addEventListener('input', () => {
+    Settings[key] = parseFloat(input.value);
+    label.textContent = fmt(Settings[key]);
+  });
+}
+bindSlider('inSpawn', 'vSpawn', 'spawnInterval', v => v.toFixed(2) + 's');
+bindSlider('inGrav', 'vGrav', 'gravity', v => String(Math.round(v)));
+bindSlider('inBounce', 'vBounce', 'bounce', v => v.toFixed(2));
+
+// Keyboard shortcuts for desktop recording: M = mute, R = reset
+window.addEventListener('keydown', e => {
+  if (e.key === 'm' || e.key === 'M') toggleMute();
+  if (e.key === 'r' || e.key === 'R') resetSim();
+});
+
+window.addEventListener('resize', resize);
+
+/* =====================================================================
+   MAIN LOOP
+   ===================================================================== */
+
+resize();
+resetSim();
+
+let lastT = performance.now();
+function frame(now) {
+  const rdt = Math.min((now - lastT) / 1000, 1 / 20);   // clamp after tab switches
+  lastT = now;
+  update(rdt);
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

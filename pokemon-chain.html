@@ -1,0 +1,1148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Will It Evolve Into Final Form?</title>
+<style>
+  /* ---------- Page shell: black, no scrolling, stage centered ---------- */
+  html, body {
+    margin: 0; height: 100%; background: #000; overflow: hidden;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+
+  /* The stage is sized by JS to a 9:16 (or taller) portrait box.
+     --u = CSS pixels per logical unit (logical width is 540). */
+  #stage { position: relative; --u: 1px; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  /* ---------- Corner counter ---------- */
+  #stats {
+    position: absolute;
+    left: calc(var(--u) * 14);
+    top: calc(env(safe-area-inset-top, 0px) + var(--u) * 12);
+    font: 800 calc(var(--u) * 13) / 1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: #fff; letter-spacing: 0.06em; pointer-events: none;
+    text-shadow: 0 0 calc(var(--u) * 6) rgba(255, 255, 255, 0.6);
+  }
+  #stats b { color: #FFD54A; text-shadow: 0 0 calc(var(--u) * 8) #FFB300; }
+
+  /* ---------- Buttons (mute / settings) ---------- */
+  #btns {
+    position: absolute;
+    right: calc(var(--u) * 12);
+    top: calc(env(safe-area-inset-top, 0px) + var(--u) * 10);
+    display: flex; gap: calc(var(--u) * 8);
+  }
+  .iconBtn {
+    width: calc(var(--u) * 38); height: calc(var(--u) * 38);
+    border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.06); color: #fff; cursor: pointer;
+    font-size: calc(var(--u) * 17); line-height: 1; padding: 0;
+    box-shadow: 0 0 calc(var(--u) * 10) rgba(255, 255, 255, 0.25);
+  }
+
+  /* ---------- Settings panel ---------- */
+  #panel {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: calc(var(--u) * 380); padding: calc(var(--u) * 20);
+    background: rgba(8, 8, 18, 0.94); border: 2px solid #7B61FF; border-radius: calc(var(--u) * 18);
+    box-shadow: 0 0 calc(var(--u) * 24) rgba(123, 97, 255, 0.7);
+    color: #fff; font: 600 calc(var(--u) * 15) system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  #panel[hidden] { display: none; }
+  #panel h2 { margin: 0 0 calc(var(--u) * 14); font-size: calc(var(--u) * 20); text-align: center; letter-spacing: 0.08em; }
+  #panel label { display: block; margin-bottom: calc(var(--u) * 14); }
+  #panel label span { float: right; color: #FFD54A; }
+  #panel input[type=range] { width: 100%; margin-top: calc(var(--u) * 6); accent-color: #7B61FF; }
+  .row { display: flex; gap: calc(var(--u) * 10); margin-top: calc(var(--u) * 6); }
+  .row button {
+    flex: 1; padding: calc(var(--u) * 10); border-radius: calc(var(--u) * 10); cursor: pointer;
+    font: 800 calc(var(--u) * 14) system-ui, sans-serif; color: #fff; background: transparent;
+  }
+  #resetBtn { border: 2px solid #FF4D6D; box-shadow: 0 0 calc(var(--u) * 10) rgba(255, 77, 109, 0.6); }
+  #clearBtn { border: 2px solid #FFD54A; box-shadow: 0 0 calc(var(--u) * 10) rgba(255, 213, 74, 0.6); }
+  #closeBtn { border: 2px solid #4D9DFF; box-shadow: 0 0 calc(var(--u) * 10) rgba(77, 157, 255, 0.6); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+
+  <div id="stats">
+    <div>EVOLUTIONS <b id="sEvo">0</b></div>
+    <div>FINAL FORMS <b id="sFinal">0</b></div>
+    <div>HIGHEST <b id="sHigh">—</b></div>
+    <div>RECORD <b id="sRecord">—</b></div>
+  </div>
+
+  <div id="btns">
+    <button class="iconBtn" id="muteBtn" aria-label="Toggle sound">🔊</button>
+    <button class="iconBtn" id="setBtn" aria-label="Settings">⚙️</button>
+  </div>
+
+  <div id="panel" hidden>
+    <h2>SETTINGS</h2>
+    <label>Spawn every <span id="vSpawn"></span>
+      <input id="inSpawn" type="range" min="0.2" max="2" step="0.05">
+    </label>
+    <label>Gravity <span id="vGrav"></span>
+      <input id="inGrav" type="range" min="200" max="2000" step="50">
+    </label>
+    <label>Bounciness <span id="vBounce"></span>
+      <input id="inBounce" type="range" min="0.1" max="0.95" step="0.05">
+    </label>
+    <div class="row">
+      <button id="resetBtn">RESET</button>
+      <button id="clearBtn">CLEAR RECORD</button>
+      <button id="closeBtn">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   CONFIG
+   ===================================================================== */
+
+const TAU = Math.PI * 2;
+const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
+const TYPE_COLORS = {
+  Fire: '#FF6B35', Water: '#4D9DFF', Grass: '#4CD964', Electric: '#FFD60A',
+  Psychic: '#FF4DA6', Dragon: '#7B61FF', Ghost: '#9B59B6',
+  Normal: '#E6E1C8', Bug: '#B4E61D', Poison: '#C86BFF', Ground: '#E8B85C',
+  Fairy: '#FF9BE0', Fighting: '#FF3B3B', Rock: '#C9A66B', Ice: '#7FF5FF',
+};
+
+/* ONE straight evolution line, in National Pokédex order.
+   Two of the same Pokémon merge into the NEXT entry in this list:
+   Bulbasaur → Ivysaur → Venusaur → Charmander → … → Mew.
+   Format: [name, primary type, isFinalForm, optional imageUrl]
+   isFinalForm = fully evolved species (triggers the golden FINAL FORM! burst). */
+const CHAIN = [
+  ['Bulbasaur', 'Grass'], ['Ivysaur', 'Grass'], ['Venusaur', 'Grass', 1],
+  ['Charmander', 'Fire'], ['Charmeleon', 'Fire'], ['Charizard', 'Fire', 1],
+  ['Squirtle', 'Water'], ['Wartortle', 'Water'], ['Blastoise', 'Water', 1],
+  ['Caterpie', 'Bug'], ['Metapod', 'Bug'], ['Butterfree', 'Bug', 1],
+  ['Weedle', 'Bug'], ['Kakuna', 'Bug'], ['Beedrill', 'Bug', 1],
+  ['Pidgey', 'Normal'], ['Pidgeotto', 'Normal'], ['Pidgeot', 'Normal', 1],
+  ['Rattata', 'Normal'], ['Raticate', 'Normal', 1],
+  ['Spearow', 'Normal'], ['Fearow', 'Normal', 1],
+  ['Ekans', 'Poison'], ['Arbok', 'Poison', 1],
+  ['Pikachu', 'Electric'], ['Raichu', 'Electric', 1],
+  ['Sandshrew', 'Ground'], ['Sandslash', 'Ground', 1],
+  ['Nidoran♀', 'Poison'], ['Nidorina', 'Poison'], ['Nidoqueen', 'Poison', 1],
+  ['Nidoran♂', 'Poison'], ['Nidorino', 'Poison'], ['Nidoking', 'Poison', 1],
+  ['Clefairy', 'Fairy'], ['Clefable', 'Fairy', 1],
+  ['Vulpix', 'Fire'], ['Ninetales', 'Fire', 1],
+  ['Jigglypuff', 'Normal'], ['Wigglytuff', 'Normal', 1],
+  ['Zubat', 'Poison'], ['Golbat', 'Poison'],
+  ['Oddish', 'Grass'], ['Gloom', 'Grass'], ['Vileplume', 'Grass', 1],
+  ['Paras', 'Bug'], ['Parasect', 'Bug', 1],
+  ['Venonat', 'Bug'], ['Venomoth', 'Bug', 1],
+  ['Diglett', 'Ground'], ['Dugtrio', 'Ground', 1],
+  ['Meowth', 'Normal'], ['Persian', 'Normal', 1],
+  ['Psyduck', 'Water'], ['Golduck', 'Water', 1],
+  ['Mankey', 'Fighting'], ['Primeape', 'Fighting'],
+  ['Growlithe', 'Fire'], ['Arcanine', 'Fire', 1],
+  ['Poliwag', 'Water'], ['Poliwhirl', 'Water'], ['Poliwrath', 'Water', 1],
+  ['Abra', 'Psychic'], ['Kadabra', 'Psychic'], ['Alakazam', 'Psychic', 1],
+  ['Machop', 'Fighting'], ['Machoke', 'Fighting'], ['Machamp', 'Fighting', 1],
+  ['Bellsprout', 'Grass'], ['Weepinbell', 'Grass'], ['Victreebel', 'Grass', 1],
+  ['Tentacool', 'Water'], ['Tentacruel', 'Water', 1],
+  ['Geodude', 'Rock'], ['Graveler', 'Rock'], ['Golem', 'Rock', 1],
+  ['Ponyta', 'Fire'], ['Rapidash', 'Fire', 1],
+  ['Slowpoke', 'Water'], ['Slowbro', 'Water', 1],
+  ['Magnemite', 'Electric'], ['Magneton', 'Electric'],
+  ["Farfetch'd", 'Normal', 1],
+  ['Doduo', 'Normal'], ['Dodrio', 'Normal', 1],
+  ['Seel', 'Water'], ['Dewgong', 'Water', 1],
+  ['Grimer', 'Poison'], ['Muk', 'Poison', 1],
+  ['Shellder', 'Water'], ['Cloyster', 'Water', 1],
+  ['Gastly', 'Ghost'], ['Haunter', 'Ghost'], ['Gengar', 'Ghost', 1],
+  ['Onix', 'Rock'],
+  ['Drowzee', 'Psychic'], ['Hypno', 'Psychic', 1],
+  ['Krabby', 'Water'], ['Kingler', 'Water', 1],
+  ['Voltorb', 'Electric'], ['Electrode', 'Electric', 1],
+  ['Exeggcute', 'Grass'], ['Exeggutor', 'Grass', 1],
+  ['Cubone', 'Ground'], ['Marowak', 'Ground', 1],
+  ['Hitmonlee', 'Fighting', 1], ['Hitmonchan', 'Fighting', 1],
+  ['Lickitung', 'Normal'],
+  ['Koffing', 'Poison'], ['Weezing', 'Poison', 1],
+  ['Rhyhorn', 'Ground'], ['Rhydon', 'Ground'],
+  ['Chansey', 'Normal'], ['Tangela', 'Grass'], ['Kangaskhan', 'Normal', 1],
+  ['Horsea', 'Water'], ['Seadra', 'Water'],
+  ['Goldeen', 'Water'], ['Seaking', 'Water', 1],
+  ['Staryu', 'Water'], ['Starmie', 'Water', 1],
+  ['Mr. Mime', 'Psychic', 1], ['Scyther', 'Bug'], ['Jynx', 'Ice', 1],
+  ['Electabuzz', 'Electric'], ['Magmar', 'Fire'], ['Pinsir', 'Bug', 1], ['Tauros', 'Normal', 1],
+  ['Magikarp', 'Water'], ['Gyarados', 'Water', 1],
+  ['Lapras', 'Water', 1], ['Ditto', 'Normal', 1],
+  ['Eevee', 'Normal'], ['Vaporeon', 'Water', 1], ['Jolteon', 'Electric', 1], ['Flareon', 'Fire', 1],
+  ['Porygon', 'Normal'],
+  ['Omanyte', 'Rock'], ['Omastar', 'Rock', 1],
+  ['Kabuto', 'Rock'], ['Kabutops', 'Rock', 1],
+  ['Aerodactyl', 'Rock', 1], ['Snorlax', 'Normal', 1],
+  ['Articuno', 'Ice', 1], ['Zapdos', 'Electric', 1], ['Moltres', 'Fire', 1],
+  ['Dratini', 'Dragon'], ['Dragonair', 'Dragon'], ['Dragonite', 'Dragon', 1],
+  ['Mewtwo', 'Psychic', 1], ['Mew', 'Psychic', 1],
+];
+
+/* Optional: set to a function (dex number → URL) to draw sprite images
+   inside every orb instead of the name, e.g.
+   const SPRITE_URL = n => `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${n}.png`;
+   A per-Pokémon imageUrl in CHAIN (4th field) takes priority. */
+const SPRITE_URL = null;
+
+// Orb radius grows with every step up the chain (capped so late tiers still fit).
+const radiusForTier = tier => Math.min(20 + 4.5 * (tier - 1), 100);
+
+// Big celebration (banner + slow-mo) when a NEW all-time record is at least this far up.
+const RECORD_MIN_TIER = 6;
+
+// Expand the table into one config object per Pokémon.
+const TIERS = CHAIN.map(([name, type, final, imageUrl], i) => ({
+  tier: i + 1,                       // also its National Pokédex number
+  num: '#' + String(i + 1).padStart(3, '0'),
+  id: name.toLowerCase(),
+  name, type,
+  final: !!final,
+  color: TYPE_COLORS[type],
+  r: radiusForTier(i + 1),
+  next: i + 1 < CHAIN.length ? i + 1 : null,   // index of the next tier (null = end of the line)
+  imageUrl: imageUrl || (SPRITE_URL ? SPRITE_URL(i + 1) : null),
+  img: null, imgRequested: false,
+}));
+const START = TIERS[0];              // only Bulbasaur ever spawns
+
+// User-tweakable settings (bound to the sliders).
+const Settings = { spawnInterval: 0.8, gravity: 900, bounce: 0.72 };
+
+/* =====================================================================
+   CANVAS, SIZING & LAYOUT
+   ===================================================================== */
+
+const stage = document.getElementById('stage');
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const LW = 540;   // logical width; everything is laid out in these units
+let LH = 960;     // logical height (grows on phones taller than 9:16)
+let scale = 1;    // device pixels per logical unit
+const L = {};     // arena layout
+
+function layout() {
+  L.cx = LW / 2;
+  L.R = 240;                          // inner radius of the ring (collision surface)
+  L.cy = LH / 2 + 50;
+  L.hw = 30;                          // half-width of the chute
+  L.chuteTop = L.cy - L.R - 105;
+  L.gapY = L.cy - Math.sqrt(L.R * L.R - L.hw * L.hw);  // where the chute meets the ring
+  L.title1 = L.chuteTop - 100;
+  L.title2 = L.chuteTop - 52;
+  L.ladderY = L.cy + L.R + 92;        // Pokédex progress strip under the ring
+}
+
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  let cssW, cssH;
+  if (wh / ww >= 16 / 9) {            // tall phone: fill the whole screen
+    cssW = ww; cssH = wh; LH = LW * wh / ww;
+  } else {                            // wider screen: 9:16 box, letterboxed in black
+    cssH = wh; cssW = wh * 9 / 16; LH = 960;
+  }
+  stage.style.width = cssW + 'px';
+  stage.style.height = cssH + 'px';
+  stage.style.setProperty('--u', (cssW / LW) + 'px');
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);   // cap for phone performance
+  scale = (cssW / LW) * dpr;
+  canvas.width = Math.round(LW * scale);
+  canvas.height = Math.round(LH * scale);
+
+  // Keep existing balls in place relative to the arena.
+  const oldCy = L.cy;
+  layout();
+  if (oldCy !== undefined) for (const b of S.balls) b.y += L.cy - oldCy;
+
+  sprites.clear();                    // orbs are cached at device resolution
+}
+
+// shadowBlur ignores the canvas transform, so scale it manually.
+const blur = v => v * scale;
+
+/* =====================================================================
+   HELPERS
+   ===================================================================== */
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[(Math.random() * arr.length) | 0];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeOutBack = t => 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2);
+
+function rgba(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+// Set a font that fits `text` into maxW, starting from maxSize.
+function fitFont(g, text, maxW, maxSize, weight) {
+  let size = maxSize;
+  g.font = `${weight} ${size}px ${FONT}`;
+  const w = g.measureText(text).width;
+  if (w > maxW) {
+    size = Math.max(5, size * maxW / w);
+    g.font = `${weight} ${size}px ${FONT}`;
+  }
+  return size;
+}
+
+// All-time record survives reloads (silently skipped if storage is blocked).
+function loadRecord() {
+  try { return parseInt(localStorage.getItem('pokeChainRecord'), 10) || 0; } catch { return 0; }
+}
+function saveRecord(v) {
+  try { localStorage.setItem('pokeChainRecord', String(v)); } catch {}
+}
+
+/* =====================================================================
+   SOUND (Web Audio, synthesized)
+   ===================================================================== */
+
+// Major pentatonic, two octaves: every wall hit sounds musical.
+const PENTA = [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5, 1174.66, 1318.51, 1567.98, 1760.0];
+
+const Sound = {
+  ctx: null, out: null, muted: false, lastBlip: 0,
+
+  // Called on page load (starts immediately where the browser allows autoplay)
+  // and again on every interaction, so audio starts the moment it's permitted.
+  unlock() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      this.ctx = new AC();
+      const comp = this.ctx.createDynamicsCompressor();
+      this.out = this.ctx.createGain();
+      this.out.gain.value = this.muted ? 0 : 0.6;
+      this.out.connect(comp);
+      comp.connect(this.ctx.destination);
+    }
+    // 'suspended' = blocked by autoplay rules; 'interrupted' = iOS paused it (e.g. a call)
+    if (this.ctx.state !== 'running' && this.ctx.state !== 'closed') this.ctx.resume().catch(() => {});
+  },
+
+  get running() { return !!this.ctx && this.ctx.state === 'running'; },
+
+  setMuted(m) {
+    this.muted = m;
+    if (this.out) this.out.gain.setTargetAtTime(m ? 0 : 0.6, this.ctx.currentTime, 0.02);
+  },
+
+  get ready() { return this.ctx && !this.muted && this.ctx.state === 'running'; },
+
+  // One enveloped oscillator note.
+  note(freq, when, dur, type = 'sine', vol = 0.2, attack = 0.005) {
+    const c = this.ctx, t = c.currentTime + when;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.out);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+
+  // Wall bounce: pitch picked by the angle where the ball hit the ring.
+  blip(angle, strength) {
+    if (!this.ready) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastBlip < 0.045) return;     // throttle so piles don't buzz
+    this.lastBlip = now;
+    const idx = Math.floor(((angle + Math.PI) / TAU) * PENTA.length) % PENTA.length;
+    this.note(PENTA[idx], 0, 0.22, 'triangle', 0.03 + 0.09 * strength);
+  },
+
+  // Rising chime; climbs in pitch as you go further up the chain.
+  evolve(tier) {
+    if (!this.ready) return;
+    const base = (tier - 2) % 6;
+    [0, 2, 4].forEach((k, i) => {
+      const f = PENTA[Math.min(base + k, PENTA.length - 1)];
+      this.note(f, i * 0.06, 0.35, 'sine', 0.16);
+      this.note(f * 2, i * 0.06, 0.2, 'triangle', 0.04);
+    });
+  },
+
+  chord(freqs, dur, vol, stagger = 0.03) {
+    freqs.forEach((f, i) => {
+      this.note(f, i * stagger, dur, 'triangle', vol, 0.02);
+      this.note(f * 1.003, i * stagger, dur, 'sine', vol * 0.6, 0.02);  // slight detune = shimmer
+    });
+  },
+
+  finalForm() {
+    if (!this.ready) return;
+    this.chord([261.63, 329.63, 392.0, 523.25, 659.25], 1.6, 0.11);
+    [1046.5, 1318.51, 1567.98, 2093.0].forEach((f, i) => this.note(f, 0.25 + i * 0.07, 0.4, 'sine', 0.05));
+  },
+
+  record() {
+    if (!this.ready) return;
+    // Low boom sweep
+    const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(140, t);
+    o.frequency.exponentialRampToValueAtTime(38, t + 0.9);
+    g.gain.setValueAtTime(0.5, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
+    o.connect(g); g.connect(this.out); o.start(t); o.stop(t + 1.2);
+    // Big stacked chord
+    this.chord([130.81, 196.0, 261.63, 329.63, 392.0, 523.25, 659.25, 783.99], 3.0, 0.08, 0.05);
+  },
+
+  overflow() {
+    if (!this.ready) return;
+    [880, 698.46, 554.37, 440].forEach((f, i) => this.note(f, i * 0.12, 0.25, 'square', 0.05));
+  },
+};
+
+/* =====================================================================
+   SIMULATION STATE
+   ===================================================================== */
+
+const S = {
+  balls: [], pending: [], fx: [],
+  flash: 0, banner: null,
+  slowmo: 0,          // real seconds of slow motion left
+  spawnT: 0,          // sim seconds until the next chute spawn
+  overflowT: 0,       // sim seconds the chute has been blocked
+  resetT: 0,          // real seconds until auto-reset after OVERFLOW
+  time: 0, acc: 0,
+  evolutions: 0, finals: 0,
+  highest: 1,         // furthest tier reached this run
+  record: loadRecord(),   // furthest tier ever reached (persists)
+};
+
+let nextBallId = 1;
+function makeBall(def, x, y, vx = 0, vy = 0) {
+  return { id: nextBallId++, def, x, y, vx, vy, r: def.r, m: def.r * def.r,
+           age: 0, pop: 0, dead: false, kicked: false };
+}
+
+function resetSim() {
+  S.balls.length = 0; S.pending.length = 0; S.fx.length = 0;
+  S.flash = 0; S.banner = null; S.slowmo = 0;
+  S.spawnT = 0.3; S.overflowT = 0; S.resetT = 0;
+  S.evolutions = S.finals = 0;
+  S.highest = 1;
+}
+
+function overlapsAny(x, y, r) {
+  return S.balls.some(b => (b.x - x) ** 2 + (b.y - y) ** 2 < (b.r + r) ** 2);
+}
+
+// Drop a Bulbasaur into the top of the chute.
+function spawnFromChute() {
+  const x = L.cx + rand(-1, 1) * (L.hw - START.r - 1);
+  const y = L.chuteTop + START.r + 2;
+  if (overlapsAny(x, y, START.r)) return;            // chute is clogged
+  S.balls.push(makeBall(START, x, y, rand(-40, 40), rand(20, 80)));
+}
+
+// Drop a Bulbasaur wherever the user tapped.
+function spawnAt(x, y) {
+  const b = makeBall(START, x, y, rand(-60, 60), rand(-30, 30));
+  b.kicked = true;
+  S.balls.push(b);
+}
+
+/* =====================================================================
+   PHYSICS
+   ===================================================================== */
+
+const STEP = 1 / 240;   // fixed physics step (4 substeps per 60fps frame)
+
+// Circle vs line segment (used for the chute walls and the gap corners).
+function collideSegment(b, x1, y1, x2, y2, e) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const t = clamp(((b.x - x1) * dx + (b.y - y1) * dy) / (dx * dx + dy * dy), 0, 1);
+  let nx = b.x - (x1 + dx * t), ny = b.y - (y1 + dy * t);
+  const d2 = nx * nx + ny * ny;
+  if (d2 >= b.r * b.r || d2 === 0) return;
+  const d = Math.sqrt(d2);
+  nx /= d; ny /= d;
+  b.x += nx * (b.r - d);
+  b.y += ny * (b.r - d);
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn < 0) { b.vx -= (1 + e) * vn * nx; b.vy -= (1 + e) * vn * ny; }
+}
+
+function collideWalls(b, e) {
+  // Chute walls (extend a bit above the chute top so nothing slips out sideways)
+  collideSegment(b, L.cx - L.hw, L.chuteTop - 60, L.cx - L.hw, L.gapY, e);
+  collideSegment(b, L.cx + L.hw, L.chuteTop - 60, L.cx + L.hw, L.gapY, e);
+
+  const dx = b.x - L.cx, dy = b.y - L.cy;
+  const inGap = Math.abs(dx) < L.hw && dy < 0;     // lined up with the chute opening
+
+  // Inside of the ring
+  const d = Math.hypot(dx, dy);
+  if (!inGap && d > L.R - b.r) {
+    const nx = dx / d, ny = dy / d;
+    b.x = L.cx + nx * (L.R - b.r);
+    b.y = L.cy + ny * (L.R - b.r);
+    const vn = b.vx * nx + b.vy * ny;
+    if (vn > 0) {
+      b.vx -= (1 + e) * vn * nx;
+      b.vy -= (1 + e) * vn * ny;
+      // a touch of tangential friction
+      const tx = -ny, ty = nx, vt = b.vx * tx + b.vy * ty;
+      b.vx -= vt * 0.02 * tx;
+      b.vy -= vt * 0.02 * ty;
+      if (vn > 140) Sound.blip(Math.atan2(dy, dx), Math.min(1, vn / 900));
+    }
+  }
+
+  // Lid above the chute so balls can't fly off-screen
+  if (inGap && b.y - b.r < L.chuteTop - 40) {
+    b.y = L.chuteTop - 40 + b.r;
+    if (b.vy < 0) b.vy *= -0.5;
+  }
+}
+
+function step(dt) {
+  const g = Settings.gravity, e = Settings.bounce;
+  const balls = S.balls;
+
+  // Integrate
+  for (const b of balls) {
+    b.vy += g * dt;
+    b.vx *= 0.9995; b.vy *= 0.9995;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.age += dt;
+    // Random sideways kick as a ball leaves the chute keeps things chaotic
+    if (!b.kicked && b.y > L.gapY + b.r) { b.kicked = true; b.vx += rand(-90, 90); }
+  }
+
+  // Ball vs ball: merge same Pokémon, otherwise mass-weighted elastic response
+  const n = balls.length, eb = e * 0.85;
+  for (let i = 0; i < n; i++) {
+    const a = balls[i];
+    if (a.dead) continue;
+    for (let j = i + 1; j < n; j++) {
+      const b = balls[j];
+      if (b.dead) continue;
+      const dx = b.x - a.x, dy = b.y - a.y, rs = a.r + b.r;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= rs * rs) continue;
+
+      if (a.def === b.def && a.def.next !== null) { merge(a, b); break; }
+
+      const d = Math.sqrt(d2) || 0.001;
+      const nx = dx / d, ny = dy / d, overlap = rs - d;
+      const inv = 1 / (a.m + b.m);
+      a.x -= nx * overlap * b.m * inv; a.y -= ny * overlap * b.m * inv;
+      b.x += nx * overlap * a.m * inv; b.y += ny * overlap * a.m * inv;
+
+      const rv = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+      if (rv < 0) {
+        const jImp = -(1 + eb) * rv / (1 / a.m + 1 / b.m);
+        a.vx -= jImp / a.m * nx; a.vy -= jImp / a.m * ny;
+        b.vx += jImp / b.m * nx; b.vy += jImp / b.m * ny;
+      }
+    }
+  }
+
+  // Walls last so nothing ends a step outside the arena
+  for (const b of balls) if (!b.dead) collideWalls(b, e);
+
+  // Apply merges
+  if (S.pending.length || balls.some(b => b.dead)) {
+    S.balls = balls.filter(b => !b.dead).concat(S.pending);
+    S.pending.length = 0;
+  }
+}
+
+/* =====================================================================
+   EVOLUTION
+   ===================================================================== */
+
+function merge(a, b) {
+  a.dead = b.dead = true;
+  const def = TIERS[a.def.next];
+  const x = (a.x + b.x) / 2, y = (a.y + b.y) / 2;
+  const nb = makeBall(def, x, y, (a.vx + b.vx) / 2, (a.vy + b.vy) / 2);
+  nb.kicked = true;
+  S.pending.push(nb);
+  S.evolutions++;
+  celebrate(def, x, y);
+}
+
+function addRing(x, y, r0, r1, color, life, width) {
+  S.fx.push({ kind: 'ring', x, y, r0, r1, color, life, max: life, width });
+}
+function addText(x, y, text, sub, color, size, life) {
+  S.fx.push({ kind: 'text', x, y, text, sub, color, size, life, max: life });
+}
+function addSparks(x, y, count, colors, speed) {
+  for (let i = 0; i < count; i++) {
+    const a = rand(0, TAU), s = rand(speed * 0.3, speed);
+    const life = rand(0.5, 1.0);
+    S.fx.push({ kind: 'spark', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                color: pick(colors), size: rand(1.5, 3.5), life, max: life });
+  }
+}
+
+function celebrate(def, x, y) {
+  const r = def.r;
+  // Local white pop at the merge point
+  S.fx.push({ kind: 'flash', x, y, r: r * 1.8, life: 0.18, max: 0.18 });
+
+  if (def.final) {
+    S.finals++;
+    addRing(x, y, r, r * 3.2, def.color, 0.7, 7);
+    addRing(x, y, r, r * 5, '#FFD54A', 1.0, 10);
+    addSparks(x, y, 34, ['#FFD54A', '#FFF3B0', def.color], 420);
+    addText(x, y - r - 10, 'FINAL FORM!', def.name, '#FFD54A', 34, 1.5);
+    S.flash = Math.max(S.flash, 0.35);
+    Sound.evolve(def.tier);
+    Sound.finalForm();
+  } else {
+    addRing(x, y, r, r * 3, def.color, 0.6, 6);
+    addSparks(x, y, 14, [def.color, '#fff'], 260);
+    addText(x, y - r - 8, 'EVOLVED!', def.name, def.color, 26, 1.1);
+    S.flash = Math.max(S.flash, 0.12);
+    Sound.evolve(def.tier);
+  }
+
+  S.highest = Math.max(S.highest, def.tier);
+
+  // New all-time record far enough up the chain: the big moment
+  if (def.tier > S.record) {
+    S.record = def.tier;
+    saveRecord(S.record);
+    if (def.tier >= RECORD_MIN_TIER) {
+      for (let i = 0; i < 5; i++) {
+        addRing(x, y, r, r * (3 + i * 1.4), `hsl(${i * 72},100%,62%)`, 0.9 + i * 0.2, 12);
+      }
+      addSparks(x, y, 70, ['#FF4D4D', '#FFD54A', '#4CD964', '#4D9DFF', '#B061FF', '#fff'], 600);
+      S.flash = 0.75;
+      S.slowmo = 2.0;                                // 30% speed for 2 real seconds
+      S.banner = { text: 'NEW RECORD!', sub: `${def.num} ${def.name}`, life: 2.4, max: 2.4, rainbow: true };
+      Sound.record();
+    }
+  }
+}
+
+function triggerOverflow() {
+  S.resetT = 2.0;
+  const best = TIERS[S.highest - 1];
+  S.banner = { text: 'OVERFLOW!', sub: `made it to ${best.num} ${best.name}`, life: 2.0, max: 2.0, rainbow: false };
+  S.flash = 0.4;
+  Sound.overflow();
+}
+
+/* =====================================================================
+   UPDATE
+   ===================================================================== */
+
+function update(rdt) {
+  S.time += rdt;
+
+  // Real-time timers (effects stay readable during slow-mo)
+  S.slowmo = Math.max(0, S.slowmo - rdt);
+  S.flash = Math.max(0, S.flash - rdt * 2.2);
+  if (S.banner && (S.banner.life -= rdt) <= 0) S.banner = null;
+
+  if (S.resetT > 0) {
+    S.resetT -= rdt;
+    if (S.resetT <= 0) resetSim();
+  }
+
+  for (const f of S.fx) {
+    f.life -= rdt;
+    if (f.kind === 'spark') {
+      f.x += f.vx * rdt; f.y += f.vy * rdt;
+      f.vx *= 0.97; f.vy = f.vy * 0.97 + 300 * rdt;
+    }
+  }
+  S.fx = S.fx.filter(f => f.life > 0);
+
+  // Simulation time
+  const sdt = rdt * (S.slowmo > 0 ? 0.3 : 1);
+
+  // Spawning from the chute
+  if (S.resetT <= 0) {
+    S.spawnT -= sdt;
+    if (S.spawnT <= 0) {
+      S.spawnT += Settings.spawnInterval;
+      spawnFromChute();
+    }
+  }
+
+  // Fixed-step physics
+  S.acc += sdt;
+  let steps = 0;
+  while (S.acc >= STEP && steps < 10) { step(STEP); S.acc -= STEP; steps++; }
+  if (steps === 10) S.acc = 0;
+
+  for (const b of S.balls) b.pop = Math.min(1, b.pop + rdt / 0.28);
+
+  // Overflow: a settled ball stuck in the chute (above the ring) for 3s
+  if (S.resetT <= 0) {
+    const topY = L.cy - L.R;
+    const blocked = S.balls.some(b => b.age > 1.5 && b.y < topY);
+    S.overflowT = blocked ? S.overflowT + sdt : 0;
+    if (S.overflowT > 3) triggerOverflow();
+  }
+
+  updateStats();
+}
+
+/* =====================================================================
+   RENDERING
+   ===================================================================== */
+
+// Each Pokémon's orb (glow, fill, outline, labels) is pre-rendered once.
+// shadowBlur is expensive on phones; this keeps 60fps with many balls.
+const sprites = new Map();
+const SPRITE_PAD = 16;
+
+function requestImage(def) {
+  def.imgRequested = true;
+  const img = new Image();     // no crossOrigin needed: we only draw, never read pixels
+  img.onload = () => { def.img = img; sprites.delete(def.id); };
+  img.src = def.imageUrl;
+}
+
+function getSprite(def) {
+  let s = sprites.get(def.id);
+  if (s) return s;
+  if (def.imageUrl && !def.imgRequested) requestImage(def);
+
+  const r = def.r, size = (r + SPRITE_PAD) * 2;
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  g.scale(c.width / size, c.height / size);
+  g.translate(size / 2, size / 2);
+
+  // Dark translucent body with a soft colored sheen
+  g.beginPath(); g.arc(0, 0, r, 0, TAU);
+  g.fillStyle = 'rgba(0,0,0,0.6)';
+  g.fill();
+  const grad = g.createRadialGradient(-r * 0.3, -r * 0.35, r * 0.1, 0, 0, r);
+  grad.addColorStop(0, rgba(def.color, 0.45));
+  grad.addColorStop(1, rgba(def.color, 0.12));
+  g.fillStyle = grad;
+  g.fill();
+
+  if (def.img) {
+    // Optional sprite image clipped inside the orb
+    g.save();
+    g.beginPath(); g.arc(0, 0, r - 3, 0, TAU); g.clip();
+    const iw = def.img.naturalWidth, ih = def.img.naturalHeight;
+    const k = (2 * (r - 3)) / Math.min(iw, ih);
+    g.drawImage(def.img, -iw * k / 2, -ih * k / 2, iw * k, ih * k);
+    g.restore();
+  } else {
+    drawLabels(g, def);
+  }
+
+  // Neon outline
+  g.beginPath(); g.arc(0, 0, r - 1.5, 0, TAU);
+  g.shadowColor = def.color;
+  g.shadowBlur = 12 * scale;
+  g.strokeStyle = def.color;
+  g.lineWidth = def.final ? 4 : 3;
+  g.stroke(); g.stroke();
+  g.shadowBlur = 0;
+  g.strokeStyle = def.final ? 'rgba(255,229,140,0.9)' : 'rgba(255,255,255,0.5)';  // gold rim on final forms
+  g.lineWidth = def.final ? 1.5 : 1;
+  g.stroke();
+
+  s = { canvas: c, size };
+  sprites.set(def.id, s);
+  return s;
+}
+
+function drawLabels(g, def) {
+  const r = def.r, maxW = r * 1.8;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+
+  fitFont(g, def.name, maxW, r * 0.46, 800);
+  g.fillStyle = '#fff';
+  g.shadowColor = def.color; g.shadowBlur = 6 * scale;
+  g.fillText(def.name, 0, -r * 0.06);
+
+  const label = `${def.num} ${def.type.toUpperCase()}`;
+  fitFont(g, label, maxW * 0.8, r * 0.24, 700);
+  g.shadowBlur = 0;
+  g.fillStyle = def.color;
+  g.fillText(label, 0, r * 0.42);
+}
+
+function drawBall(b) {
+  const sp = getSprite(b.def);
+  const k = b.pop < 1 ? 0.6 + 0.4 * easeOutBack(b.pop) : 1;
+  const size = sp.size * k;
+  ctx.drawImage(sp.canvas, b.x - size / 2, b.y - size / 2, size, size);
+}
+
+function drawTitle() {
+  const hue = (S.time * 25) % 360;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = `hsl(${hue},100%,60%)`;
+  ctx.shadowBlur = blur(18);
+
+  fitFont(ctx, 'Will It Evolve', 500, 46, 900);
+  ctx.fillStyle = '#fff';
+  ctx.fillText('Will It Evolve', L.cx, L.title1);
+
+  fitFont(ctx, 'Into Final Form?', 500, 46, 900);
+  const gold = ctx.createLinearGradient(0, L.title2 - 22, 0, L.title2 + 22);
+  gold.addColorStop(0, '#FFF3B0');
+  gold.addColorStop(1, '#FFB300');
+  ctx.fillStyle = gold;
+  ctx.shadowColor = '#FFB300';
+  ctx.fillText('Into Final Form?', L.cx, L.title2);
+  ctx.restore();
+}
+
+function drawArena() {
+  const RW = 12;                       // ring thickness
+  const rr = L.R + RW / 2;             // stroke centerline so the inner edge = L.R
+  const hx = L.hw + RW / 2;
+  const ga = Math.asin(hx / rr);       // half-angle of the gap
+  const joinY = L.cy - rr * Math.cos(ga);
+  const hue = (S.time * 30) % 360;
+
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+
+  // One path: left chute wall → around the ring (long way) → right chute wall
+  ctx.beginPath();
+  ctx.moveTo(L.cx - hx, L.chuteTop);
+  ctx.lineTo(L.cx - hx, joinY);
+  ctx.arc(L.cx, L.cy, rr, -Math.PI / 2 - ga, -Math.PI / 2 + ga, true);
+  ctx.lineTo(L.cx + hx, L.chuteTop);
+
+  // Outer glow tube
+  ctx.strokeStyle = `hsl(${hue},100%,58%)`;
+  ctx.shadowColor = `hsl(${hue},100%,55%)`;
+  ctx.shadowBlur = blur(30);
+  ctx.lineWidth = RW;
+  ctx.stroke();
+  // Bright core
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = `hsl(${hue},100%,85%)`;
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Pokédex progress strip: last few reached tiers, then "?" for what's next.
+function drawLadder() {
+  const hi = S.highest;
+  const first = Math.max(1, hi - 3);
+  const last = Math.min(TIERS.length, first + 5);
+  const gap = 66, mr = 19;
+  const x0 = L.cx - (last - first) * gap / 2, y = L.ladderY;
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.font = `800 12px ${FONT}`;
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.fillText('P O K É D E X   P R O G R E S S', L.cx, y - 38);
+
+  for (let t = first; t <= last; t++) {
+    const def = TIERS[t - 1], x = x0 + (t - first) * gap;
+
+    // Chevron between entries
+    if (t > first) {
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.font = `800 14px ${FONT}`;
+      ctx.fillText('›', x - gap / 2, y);
+    }
+
+    if (t <= hi) {
+      const sp = getSprite(def), size = sp.size * mr / def.r;
+      ctx.drawImage(sp.canvas, x - size / 2, y - size / 2, size, size);
+      if (t === hi) {                  // pulsing marker on the current best
+        ctx.strokeStyle = '#FFD54A';
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.5 + 0.5 * Math.sin(S.time * 5);
+        ctx.beginPath(); ctx.arc(x, y, mr + 6, 0, TAU); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      ctx.fillStyle = def.color;
+      fitFont(ctx, def.num, gap - 6, 11, 800);
+      ctx.fillText(def.num, x, y + mr + 13);
+    } else {
+      ctx.setLineDash([3, 4]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, mr, 0, TAU); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font = `900 16px ${FONT}`;
+      ctx.fillText('?', x, y + 1);
+      ctx.font = `800 11px ${FONT}`;
+      ctx.fillText(def.num, x, y + mr + 13);
+    }
+  }
+  ctx.restore();
+}
+
+function drawFx() {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  for (const f of S.fx) {
+    const t = 1 - f.life / f.max;      // 0 → 1 over the effect's life
+
+    if (f.kind === 'ring') {
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = f.color;
+      ctx.shadowColor = f.color;
+      ctx.shadowBlur = blur(16);
+      ctx.lineWidth = f.width * (1 - t) + 1;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r0 + (f.r1 - f.r0) * easeOut(t), 0, TAU);
+      ctx.stroke();
+    } else if (f.kind === 'spark') {
+      ctx.globalAlpha = 1 - t;
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = f.color;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.size, 0, TAU); ctx.fill();
+    } else if (f.kind === 'flash') {
+      ctx.globalAlpha = (1 - t) * 0.9;
+      ctx.shadowBlur = 0;
+      const g = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r);
+      g.addColorStop(0, '#fff');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, TAU); ctx.fill();
+    }
+  }
+
+  // Floating text drawn normally so it stays legible
+  ctx.globalCompositeOperation = 'source-over';
+  for (const f of S.fx) {
+    if (f.kind !== 'text') continue;
+    const t = 1 - f.life / f.max;
+    const pop = t < 0.15 ? 0.6 + 0.4 * easeOutBack(t / 0.15) : 1;
+    ctx.globalAlpha = t < 0.7 ? 1 : (1 - t) / 0.3;
+    const y = f.y - 55 * easeOut(t);
+
+    ctx.font = `900 ${f.size * pop}px ${FONT}`;
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.shadowBlur = 0;
+    ctx.strokeText(f.text, f.x, y);
+    ctx.fillStyle = f.color;
+    ctx.shadowColor = f.color;
+    ctx.shadowBlur = blur(14);
+    ctx.fillText(f.text, f.x, y);
+
+    if (f.sub) {                       // the Pokémon it just became
+      const sy = y + f.size * 0.8;
+      ctx.font = `800 ${f.size * 0.55 * pop}px ${FONT}`;
+      ctx.shadowBlur = 0;
+      ctx.lineWidth = 4;
+      ctx.strokeText(f.sub, f.x, sy);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(f.sub, f.x, sy);
+    }
+  }
+  ctx.restore();
+}
+
+function drawBanner() {
+  const B = S.banner;
+  if (!B) return;
+  const t = 1 - B.life / B.max;
+  const fadeOut = Math.min(1, B.life / 0.4);
+  const pop = t < 0.12 ? 0.3 + 0.7 * easeOutBack(t / 0.12) : 1;
+  const y = L.cy - 30;
+
+  ctx.save();
+  ctx.globalAlpha = fadeOut;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.translate(L.cx, y);
+  ctx.scale(pop, pop);
+
+  // Dark band behind the text
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(-LW / 2, -48, LW, 112);
+
+  fitFont(ctx, B.text, 500, 60, 900);
+  let fill;
+  if (B.rainbow) {
+    fill = ctx.createLinearGradient(-250, 0, 250, 0);
+    const shift = S.time * 120;
+    for (let i = 0; i <= 6; i++) fill.addColorStop(i / 6, `hsl(${(i * 60 + shift) % 360},100%,62%)`);
+    ctx.shadowColor = '#fff';
+  } else {
+    const on = Math.floor(S.time * 8) % 2 === 0;
+    fill = on ? '#FF3B5C' : '#FF8FA3';
+    ctx.shadowColor = '#FF3B5C';
+  }
+  ctx.shadowBlur = blur(24);
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+  ctx.strokeText(B.text, 0, 0);
+  ctx.fillStyle = fill;
+  ctx.fillText(B.text, 0, 0);
+
+  if (B.sub) {
+    fitFont(ctx, B.sub, 440, 26, 800);
+    ctx.shadowBlur = blur(10);
+    ctx.fillStyle = B.rainbow ? '#FFD54A' : '#fff';
+    ctx.fillText(B.sub, 0, 44);
+  }
+  ctx.restore();
+}
+
+// Only shown while the browser is still blocking audio.
+function drawHint() {
+  if (!Sound.ctx || Sound.running) return;
+  ctx.save();
+  ctx.globalAlpha = 0.55 + 0.35 * Math.sin(S.time * 3);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  fitFont(ctx, 'TAP ANYWHERE FOR SOUND', 400, 18, 800);
+  ctx.fillText('TAP ANYWHERE FOR SOUND', L.cx, L.cy - 40);
+  fitFont(ctx, 'tap inside the ring to drop a Bulbasaur', 400, 14, 600);
+  ctx.fillText('tap inside the ring to drop a Bulbasaur', L.cx, L.cy - 14);
+  ctx.restore();
+}
+
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+
+  drawTitle();
+  drawArena();
+  drawHint();
+  for (const b of S.balls) drawBall(b);
+  drawLadder();
+  drawFx();
+
+  if (S.flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${S.flash})`;
+    ctx.fillRect(0, 0, LW, LH);
+  }
+  drawBanner();
+}
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+const statEls = { evo: $('sEvo'), fin: $('sFinal'), high: $('sHigh'), rec: $('sRecord') };
+const lastStats = {};
+
+function updateStats() {
+  const name = tier => tier > 0 ? `${TIERS[tier - 1].name.toUpperCase()} ${TIERS[tier - 1].num}` : '—';
+  const vals = { evo: S.evolutions, fin: S.finals, high: name(S.highest), rec: name(S.record) };
+  for (const k in vals) {
+    if (vals[k] !== lastStats[k]) { statEls[k].textContent = vals[k]; lastStats[k] = vals[k]; }
+  }
+}
+
+// Tap inside the ring = manual drop
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width * LW;
+  const y = (e.clientY - rect.top) / rect.height * LH;
+  if (Math.hypot(x - L.cx, y - L.cy) < L.R - START.r && S.resetT <= 0) spawnAt(x, y);
+});
+
+// Audio starts on load if the browser allows it. If it's blocked, any touch,
+// click or key press starts it (different browsers count different events).
+for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) {
+  window.addEventListener(ev, () => Sound.unlock(), { capture: true });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Sound.unlock(); });
+
+const muteBtn = $('muteBtn');
+function toggleMute() {
+  Sound.setMuted(!Sound.muted);
+  muteBtn.textContent = Sound.muted ? '🔇' : '🔊';
+}
+muteBtn.addEventListener('click', toggleMute);
+
+const panel = $('panel');
+$('setBtn').addEventListener('click', () => { panel.hidden = !panel.hidden; });
+$('closeBtn').addEventListener('click', () => { panel.hidden = true; });
+$('resetBtn').addEventListener('click', () => { resetSim(); panel.hidden = true; });
+$('clearBtn').addEventListener('click', () => { S.record = 0; saveRecord(0); });
+
+// Bind a slider to a Settings key with a formatted readout
+function bindSlider(inputId, labelId, key, fmt) {
+  const input = $(inputId), label = $(labelId);
+  input.value = Settings[key];
+  label.textContent = fmt(Settings[key]);
+  input.addEventListener('input', () => {
+    Settings[key] = parseFloat(input.value);
+    label.textContent = fmt(Settings[key]);
+  });
+}
+bindSlider('inSpawn', 'vSpawn', 'spawnInterval', v => v.toFixed(2) + 's');
+bindSlider('inGrav', 'vGrav', 'gravity', v => String(Math.round(v)));
+bindSlider('inBounce', 'vBounce', 'bounce', v => v.toFixed(2));
+
+// Keyboard shortcuts for desktop recording: M = mute, R = reset
+window.addEventListener('keydown', e => {
+  if (e.key === 'm' || e.key === 'M') toggleMute();
+  if (e.key === 'r' || e.key === 'R') resetSim();
+});
+
+window.addEventListener('resize', resize);
+
+/* =====================================================================
+   MAIN LOOP
+   ===================================================================== */
+
+resize();
+resetSim();
+Sound.unlock();     // try to start sound right away
+
+let lastT = performance.now();
+function frame(now) {
+  const rdt = Math.min((now - lastT) / 1000, 1 / 20);   // clamp after tab switches
+  lastT = now;
+  update(rdt);
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

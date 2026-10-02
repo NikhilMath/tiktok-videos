@@ -35,6 +35,7 @@ tiktok-videos/
 │   └── 06-one-piece.html
 ├── tools/
 │   └── render.py        ← records a video page to an MP4
+├── ball-battle/         ← separate Python generator: two weapon balls fight (see ball-battle/README.md)
 └── renders/             ← finished MP4s (git-ignored, never committed)
 ```
 
@@ -218,6 +219,13 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 - **Sound:** coin clinks on merges, wooden knocks on walls, shanty fanfares, wind and thunder, cannon booms, ocean swells, ship's bell.
 - **Bands:** the first video with the shorter ~285px bottom band.
 
+### Ball Battle (Python generator, `ball-battle/`)
+- **What it is:** a separate tool, made from the user's own spec, so its rules differ from the HTML videos.
+- **Video:** 30–60 second fights, an end freeze of 2 seconds, and a layout that keeps clear of TikTok's bottom 20% and right edge.
+- **How it works:** pygame draws frames off-screen and ffmpeg encodes them about 3.5× faster than real time. Sound effects are generated with numpy and mixed in at each event's exact time.
+- **Commands:** `ball_battle.py --find-seed` searches for close fights in seconds, and `CONFIG` holds everything for a new episode.
+- **Details:** setup, episodes and balancing are in `ball-battle/README.md`.
+
 ---
 
 ## Styles used so far (pick something different next time)
@@ -230,6 +238,7 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 | 04 | Manga/comic paper, ink, halftone | Square stage, top-down | Battle royale with HP, K.O.s, power-up pickups | Punchy hits, booms, risers |
 | 05 | Red-moon horror-fantasy, glitch flashes | The moon, swirling vortex | Swarm growth vs. enemy waves (guess the number) | Taiko loop, poofs, drones |
 | 06 | Treasure map, wooden ship's wheel, wanted posters | Wheel and chute, gravity, sea inside | Merge chain (the user asked for 01's game) + sea events | Coins, wood knocks, shanty, ocean |
+| Ball Battle | Dark neon arena, glow and trails (Python) | Circle, no gravity, +5% speed per bounce | 1v1 spinning-weapon duel with HP | Generated blips, thuds, metal clangs |
 
 **Not used yet:**
 - **Looks:** pixel-art/retro 16-bit, chalkboard doodle, vaporwave, underwater, blueprint, stained glass, claymation-like soft shapes, newspaper print.

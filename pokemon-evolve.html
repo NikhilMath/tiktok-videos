@@ -247,9 +247,10 @@ function layout() {
   L.hw = 30;                          // half-width of the chute
   L.chuteTop = L.cy - L.R - 105;
   L.gapY = L.cy - Math.sqrt(L.R * L.R - L.hw * L.hw);  // where the chute meets the ring
-  L.title1 = L.chuteTop - 100;
-  L.title2 = L.chuteTop - 52;
-  L.timerY = L.title1 - 60;           // round countdown above the title
+  L.title1 = L.chuteTop - 132;        // hook: small lead-in line
+  L.title2 = L.chuteTop - 88;         // hook: big gold lines
+  L.title3 = L.chuteTop - 42;
+  L.timerY = L.title1 - 42;           // round countdown above the hook
   L.ladderY = L.cy + L.R + 92;        // Pokédex progress strip under the ring
 }
 
@@ -660,9 +661,16 @@ function celebrate(def, x, y) {
   const r = def.r;
   // Local white pop at the merge point
   S.fx.push({ kind: 'flash', x, y, r: r * 1.8, life: 0.18, max: 0.18 });
+  if (def.final) S.finals++;
 
-  if (def.final) {
-    S.finals++;
+  // Text, golden bursts and screen flashes are only for a Pokémon reached for
+  // the first time this round. Repeat merges just get a quick burst + chime.
+  const isNew = def.tier > S.highest;
+  if (!isNew) {
+    addRing(x, y, r, r * 2.4, def.color, 0.5, 5);
+    addSparks(x, y, 10, [def.color, '#fff'], 220);
+    Sound.evolve(def.tier);
+  } else if (def.final) {
     addRing(x, y, r, r * 3.2, def.color, 0.7, 7);
     addRing(x, y, r, r * 5, '#FFD54A', 1.0, 10);
     addSparks(x, y, 34, ['#FFD54A', '#FFF3B0', def.color], 420);
@@ -873,6 +881,10 @@ function drawBall(b) {
   ctx.drawImage(sp.canvas, b.x - size / 2, b.y - size / 2, size, size);
 }
 
+// The hook: a comment prompt at the top for retention.
+// First line is a smaller white lead-in, the rest is big neon gold.
+const HOOK = ['Write in the comments', 'what the MAX', 'evolution will be!'];
+
 function drawTitle() {
   const hue = (S.time * 25) % 360;
   ctx.save();
@@ -881,17 +893,20 @@ function drawTitle() {
   ctx.shadowColor = `hsl(${hue},100%,60%)`;
   ctx.shadowBlur = blur(18);
 
-  fitFont(ctx, 'Will It Evolve', 500, 46, 900);
+  fitFont(ctx, HOOK[0], 500, 30, 900);
   ctx.fillStyle = '#fff';
-  ctx.fillText('Will It Evolve', L.cx, L.title1);
+  ctx.fillText(HOOK[0], L.cx, L.title1);
 
-  fitFont(ctx, 'Into Final Form?', 500, 46, 900);
-  const gold = ctx.createLinearGradient(0, L.title2 - 22, 0, L.title2 + 22);
-  gold.addColorStop(0, '#FFF3B0');
-  gold.addColorStop(1, '#FFB300');
-  ctx.fillStyle = gold;
   ctx.shadowColor = '#FFB300';
-  ctx.fillText('Into Final Form?', L.cx, L.title2);
+  [L.title2, L.title3].forEach((y, i) => {
+    const text = HOOK[i + 1];
+    fitFont(ctx, text, 500, 46, 900);
+    const gold = ctx.createLinearGradient(0, y - 22, 0, y + 22);
+    gold.addColorStop(0, '#FFF3B0');
+    gold.addColorStop(1, '#FFB300');
+    ctx.fillStyle = gold;
+    ctx.fillText(text, L.cx, y);
+  });
   ctx.restore();
 }
 

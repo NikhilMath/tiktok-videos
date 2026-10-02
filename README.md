@@ -12,7 +12,7 @@ These apply to every video in this repo, not just the current one.
 
 1. **2 minutes long.** Every sim runs one round with a **2:00 countdown** at the top of the screen.
 2. **Freeze at the end.** At 0:00 the simulation stops and stays frozen on the final state. Nothing moves or spawns, and nothing resets. A "TIME'S UP!" banner says how far it got.
-3. **Hook at the top for retention.** Show a big question title at the top from the very first frame (e.g. *"Will It Evolve Into Final Form?"*), with the timer right above it, so viewers stay to see the answer.
+3. **Hook at the top for retention.** Show a big hook at the top from the very first frame, with the timer right above it. Make it a comment prompt or question that makes people stay to see the answer (e.g. *"Write in the comments what the MAX evolution will be!"*).
 4. **Vertical 9:16, 1080×1920.** Black background, neon glow style, and it must run smoothly at 60fps (pre-render anything expensive).
 5. **Sound included, automatically.** Use synthesized Web Audio with no audio files. There's no "tap for sound" prompt; sound starts on its own and is always recorded into the video.
 6. **Everything that should be in the video is drawn on the canvas.** Only the canvas is recorded. HTML overlays (buttons, settings) don't appear in the video.
@@ -52,7 +52,7 @@ Open the page (locally or on the live site) and press **⏺** in the top-right c
 
 ## Current video: `pokemon-evolve.html`
 
-**Hook:** "Will It Evolve Into Final Form?"
+**Hook:** "Write in the comments what the MAX evolution will be!" (the `HOOK` constant)
 
 ### What it does
 - A big glowing ring cycles through rainbow colors, fed by a narrow chute at the top.
@@ -60,8 +60,8 @@ Open the page (locally or on the live site) and press **⏺** in the top-right c
 - **Two of the same Pokémon merge into the next one in Pokédex order.** It's one straight line with no branching: Bulbasaur → Ivysaur → Venusaur → Charmander → … → Mewtwo → Mew (all 151 from Gen 1).
 - Each ball shows the Pokémon's name, Pokédex number and type, in its type's color. Balls get bigger the further along the chain they are.
 - **Effects:**
-  - **"EVOLVED!"**: ring burst, sparks and a chime.
-  - **"FINAL FORM!"** (when it reaches a fully evolved Pokémon like Venusaur or Charizard): golden burst, screen flash and a chord.
+  - **Every merge:** small ring burst, sparks and a chime, with no text.
+  - **First time a Pokémon is reached in the round:** a floating "EVOLVED!" with its name. If it's fully evolved (like Venusaur or Charizard), you get **"FINAL FORM!"** with a golden burst, screen flash and a chord instead.
   - **"NEW RECORD!"** (when it beats the all-time best, from #006 on): rainbow banner and 30% slow motion for 2 seconds.
 - **Physics:** gravity, bouncy walls, mass-based ball collisions, and a random sideways kick as each ball leaves the chute.
 - **Sound:** musical blips on wall hits (pitch depends on where the ball hits), rising chimes, chords, ticks in the last 5 seconds, and a bell at time's up.

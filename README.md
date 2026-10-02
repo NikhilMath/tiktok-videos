@@ -12,13 +12,14 @@ These apply to every video in this repo, not just the current one.
 
 1. **2 minutes long.** Every sim runs one round with a **2:00 countdown** at the top of the screen.
 2. **Freeze at the end.** At 0:00 the simulation stops and stays frozen on the final state. Nothing moves or spawns, and nothing resets. A "TIME'S UP!" banner says how far it got.
-3. **Hook at the top for retention.** Show a big hook at the top from the very first frame, with the timer right above it. Make it a comment prompt or question that makes people stay to see the answer (e.g. *"Comment below 👇 What will the MAX evolution be?"*). Ask a question and tell people to comment.
-4. **Vertical 9:16, 1080×1920.** Black background, neon glow style, and it must run smoothly at 60fps (pre-render anything expensive).
-5. **Sound included, automatically.** Use synthesized Web Audio with no audio files. There's no "tap for sound" prompt; sound starts on its own and is always recorded into the video.
-6. **Everything that should be in the video is drawn on the canvas.** Only the canvas is recorded. HTML overlays (buttons, settings) don't appear in the video.
-7. **One file per video, improved in place.** Each video is one self-contained `.html` file (HTML + CSS + JS, no libraries). Edit and overwrite it; don't keep old versions or "v2" copies. Finish one video completely before starting the next.
-8. **The final deliverable is a video file.** When a video is done, render it to an MP4 (see below) and post that to TikTok.
-9. **Always push to `main`.** Every finished change is committed and pushed to `main` right away so the live site is always current.
+3. **Leave blank space at the top.** Keep the top 180px of the video (`TOP_SPACE` = 90 units) empty so TikTok's top bar ("Following | For You") never covers the counter, timer or hook.
+4. **Hook at the top for retention.** Show a big hook at the top from the very first frame, with the timer right above it. Make it a comment prompt or question that makes people stay to see the answer (e.g. *"Comment below 👇 What will the MAX evolution be?"*). Ask a question and tell people to comment.
+5. **Vertical 9:16, 1080×1920.** Black background, neon glow style, and it must run smoothly at 60fps (pre-render anything expensive).
+6. **Sound included, automatically.** Use synthesized Web Audio with no audio files. There's no "tap for sound" prompt; sound starts on its own and is always recorded into the video.
+7. **Everything that should be in the video is drawn on the canvas.** Only the canvas is recorded. HTML overlays (buttons, settings) don't appear in the video.
+8. **One file per video, improved in place.** Each video is one self-contained `.html` file (HTML + CSS + JS, no libraries). Edit and overwrite it; don't keep old versions or "v2" copies. Finish one video completely before starting the next.
+9. **The final deliverable is a video file.** When a video is done, render it to an MP4 (see below) and post that to TikTok.
+10. **Always push to `main`.** Every finished change is committed and pushed to `main` right away so the live site is always current.
 
 ---
 
@@ -50,7 +51,22 @@ Open the page (locally or on the live site) and press **⏺** in the top-right c
 
 ---
 
-## Current video: `pokemon-evolve.html`
+## Current video: `hunter-x-hunter.html`
+
+**Hook:** "Comment below 👇 Who will be the STRONGEST?" (the `HOOK` constant)
+
+Same engine, physics, settings, sound, timer, freeze and recorder as the Pokémon video below, with Hunter x Hunter characters instead:
+
+- **Every ball that drops is Gon.** Two of the same character merge into the next one up a fan power ladder (weakest → strongest):
+  Gon → Killua → Kurapika → Knuckle → Biscuit → Feitan → Uvogin → Illumi → **Hisoka** → **Chrollo** → **Youpi** → **Pitou** → **Netero** → **Meruem**
+- **Ball colors and labels** use Nen types: Enhancer, Transmuter, Emitter, Conjurer, Manipulator, Specialist. Each ball shows the character's level, e.g. "LV.9 TRANSMUTER".
+- **Text:** "POWER UP!" the first time each character is reached. The bold names above are S-rank and get the golden **"S-RANK!"** burst instead.
+- **On screen:** counter (power ups, S-ranks, highest, record), plus a **power ladder** strip under the ring.
+- **Top space:** this is the first video with the blank band at the top (`TOP_SPACE`). It's laid out top-down: counter and timer, then the hook, then the ring. The ring is a bit smaller (radius 225) so everything still fits.
+- **What it reaches in 2:00:** in 20 simulated rounds, 16 ended on **LV.9 Hisoka** and 4 on LV.8 Illumi, with no overflows.
+- **To change the ladder:** edit `CHAIN` (order, Nen type, S-rank flag).
+
+## Finished: `pokemon-evolve.html`
 
 **Hook:** "Comment below 👇 What will the MAX evolution be?" (the `HOOK` constant)
 
@@ -86,7 +102,7 @@ With the video settings, about 480 Bulbasaurs drop in 2:00. Each step needs twic
 
 ## Starting the next video
 
-1. Create a new single `.html` file in this folder, using `pokemon-evolve.html` as the template. Reuse its timer, freeze, recorder, sound setup, canvas sizing and neon look.
+1. Create a new single `.html` file in this folder, using the newest video (`hunter-x-hunter.html`) as the template, since it has the top-space layout. Reuse its timer, freeze, recorder, sound setup, canvas sizing and neon look.
 2. Write a new hook question for the top.
 3. Keep the 2:00 round and the freeze at the end.
 4. Add it to `index.html`.
@@ -97,7 +113,8 @@ With the video settings, about 480 Bulbasaurs drop in 2:00. Each step needs twic
 
 | File | Purpose |
 |---|---|
-| `pokemon-evolve.html` | Current video: Pokédex evolution chain |
+| `hunter-x-hunter.html` | Current video: Hunter x Hunter power ladder |
+| `pokemon-evolve.html` | Finished video: Pokédex evolution chain |
 | `index.html` | Live-site home page that links to each video |
 | `render.py` | Renders a page to a TikTok-ready MP4 in `renders/` |
 | `CLAUDE.md` | Instructions for Claude Code (points here) |

@@ -1,0 +1,1338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Who Will Be the Strongest?</title>
+<style>
+  /* ---------- Page shell: black, no scrolling, stage centered ---------- */
+  html, body {
+    margin: 0; height: 100%; background: #000; overflow: hidden;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+
+  /* The stage is sized by JS to a 9:16 (or taller) portrait box.
+     --u = CSS pixels per logical unit (logical width is 540). */
+  #stage { position: relative; --u: 1px; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  /* ---------- Recording indicator (on screen only, not in the video) ---------- */
+  #recBadge {
+    position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + var(--u) * 14);
+    transform: translateX(-50%); padding: calc(var(--u) * 6) calc(var(--u) * 14);
+    border-radius: 999px; background: rgba(255, 30, 60, 0.9); color: #fff;
+    font: 800 calc(var(--u) * 14) system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: 0.08em; pointer-events: none;
+  }
+  #recBadge[hidden] { display: none; }
+  #recBtn.on { border-color: #FF3B5C; box-shadow: 0 0 calc(var(--u) * 14) #FF3B5C; }
+
+  /* ---------- Buttons (mute / settings) ---------- */
+  #btns {
+    position: absolute;
+    right: calc(var(--u) * 12);
+    top: calc(env(safe-area-inset-top, 0px) + var(--u) * 10);
+    display: flex; gap: calc(var(--u) * 8);
+  }
+  .iconBtn {
+    width: calc(var(--u) * 38); height: calc(var(--u) * 38);
+    border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.06); color: #fff; cursor: pointer;
+    font-size: calc(var(--u) * 17); line-height: 1; padding: 0;
+    box-shadow: 0 0 calc(var(--u) * 10) rgba(255, 255, 255, 0.25);
+  }
+
+  /* ---------- Settings panel ---------- */
+  #panel {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: calc(var(--u) * 380); padding: calc(var(--u) * 20);
+    background: rgba(8, 8, 18, 0.94); border: 2px solid #7B61FF; border-radius: calc(var(--u) * 18);
+    box-shadow: 0 0 calc(var(--u) * 24) rgba(123, 97, 255, 0.7);
+    color: #fff; font: 600 calc(var(--u) * 15) system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  #panel[hidden] { display: none; }
+  #panel h2 { margin: 0 0 calc(var(--u) * 14); font-size: calc(var(--u) * 20); text-align: center; letter-spacing: 0.08em; }
+  #panel label { display: block; margin-bottom: calc(var(--u) * 14); }
+  #panel label span { float: right; color: #FFD54A; }
+  #panel input[type=range] { width: 100%; margin-top: calc(var(--u) * 6); accent-color: #7B61FF; }
+  .row { display: flex; gap: calc(var(--u) * 10); margin-top: calc(var(--u) * 6); }
+  .row button {
+    flex: 1; padding: calc(var(--u) * 10); border-radius: calc(var(--u) * 10); cursor: pointer;
+    font: 800 calc(var(--u) * 14) system-ui, sans-serif; color: #fff; background: transparent;
+  }
+  #resetBtn { border: 2px solid #FF4D6D; box-shadow: 0 0 calc(var(--u) * 10) rgba(255, 77, 109, 0.6); }
+  #clearBtn { border: 2px solid #FFD54A; box-shadow: 0 0 calc(var(--u) * 10) rgba(255, 213, 74, 0.6); }
+  #closeBtn { border: 2px solid #4D9DFF; box-shadow: 0 0 calc(var(--u) * 10) rgba(77, 157, 255, 0.6); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+
+  <div id="recBadge" hidden>● REC 0:00</div>
+
+  <div id="btns">
+    <button class="iconBtn" id="recBtn" aria-label="Record a video">⏺</button>
+    <button class="iconBtn" id="muteBtn" aria-label="Toggle sound">🔊</button>
+    <button class="iconBtn" id="setBtn" aria-label="Settings">⚙️</button>
+  </div>
+
+  <div id="panel" hidden>
+    <h2>SETTINGS</h2>
+    <label>Spawn every <span id="vSpawn"></span>
+      <input id="inSpawn" type="range" min="0.2" max="2" step="0.05">
+    </label>
+    <label>Gravity <span id="vGrav"></span>
+      <input id="inGrav" type="range" min="200" max="2000" step="50">
+    </label>
+    <label>Bounciness <span id="vBounce"></span>
+      <input id="inBounce" type="range" min="0.1" max="0.95" step="0.05">
+    </label>
+    <div class="row">
+      <button id="resetBtn">RESET</button>
+      <button id="clearBtn">CLEAR RECORD</button>
+      <button id="closeBtn">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   CONFIG
+   ===================================================================== */
+
+const TAU = Math.PI * 2;
+const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
+const NEN_COLORS = {
+  Enhancer: '#FF6B35', Transmuter: '#4DD8FF', Emitter: '#FFD60A',
+  Conjurer: '#B061FF', Manipulator: '#4CD964', Specialist: '#FF4DA6',
+};
+
+/* ONE straight power ladder, weakest → strongest.
+   Two of the same character merge into the NEXT entry in this list:
+   Gon → Killua → Kurapika → … → Netero → Meruem.
+   Format: [name, Nen type, isSRank, optional imageUrl]
+   isSRank = top-tier character (triggers the golden S-RANK! burst).
+   The order is a fan power ranking; reorder freely. */
+const CHAIN = [
+  ['Gon', 'Enhancer'],
+  ['Killua', 'Transmuter'],
+  ['Kurapika', 'Conjurer'],
+  ['Knuckle', 'Enhancer'],
+  ['Biscuit', 'Transmuter'],
+  ['Feitan', 'Transmuter'],
+  ['Uvogin', 'Enhancer'],
+  ['Illumi', 'Manipulator'],
+  ['Hisoka', 'Transmuter', 1],
+  ['Chrollo', 'Specialist', 1],
+  ['Youpi', 'Transmuter', 1],
+  ['Pitou', 'Specialist', 1],
+  ['Netero', 'Enhancer', 1],
+  ['Meruem', 'Specialist', 1],
+];
+
+/* Optional: set to a function (level → URL) to draw images inside every orb
+   instead of the name. A per-character imageUrl in CHAIN (4th field) takes priority. */
+const SPRITE_URL = null;
+
+// Orb radius grows with every step up the chain (capped so late tiers still fit).
+const radiusForTier = tier => Math.min(20 + 4.5 * (tier - 1), 100);
+
+// Big celebration (banner + slow-mo) when a NEW all-time record is at least this far up.
+const RECORD_MIN_TIER = 6;
+
+// Length of one round. When the clock hits 0:00 everything freezes in place.
+const ROUND_SECONDS = 120;   // 2:00
+
+// Expand the table into one config object per character.
+const TIERS = CHAIN.map(([name, type, elite, imageUrl], i) => ({
+  tier: i + 1,                       // power level on the ladder
+  num: 'LV.' + (i + 1),
+  id: name.toLowerCase(),
+  name, type,
+  elite: !!elite,
+  color: NEN_COLORS[type],
+  r: radiusForTier(i + 1),
+  next: i + 1 < CHAIN.length ? i + 1 : null,   // index of the next tier (null = end of the line)
+  imageUrl: imageUrl || (SPRITE_URL ? SPRITE_URL(i + 1) : null),
+  img: null, imgRequested: false,
+}));
+const START = TIERS[0];              // only Gon ever spawns
+
+// User-tweakable settings (bound to the sliders).
+const Settings = { spawnInterval: 0.25, gravity: 1750, bounce: 0.8 };
+
+/* =====================================================================
+   CANVAS, SIZING & LAYOUT
+   ===================================================================== */
+
+const stage = document.getElementById('stage');
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const LW = 540;   // logical width; everything is laid out in these units
+let LH = 960;     // logical height (grows on phones taller than 9:16)
+let scale = 1;    // device pixels per logical unit
+const L = {};     // arena layout
+
+// Empty band at the top so TikTok's top bar ("Following | For You") never
+// covers the counter, timer or hook. 90 units = 180px of the 1920px video.
+const TOP_SPACE = 90;
+
+// Laid out top-down inside a 960-tall block (centered on taller phone screens).
+function layout() {
+  const top = (LH - 960) / 2 + TOP_SPACE;
+  L.cx = LW / 2;
+  L.R = 225;                          // inner radius of the ring (collision surface)
+  L.hw = 30;                          // half-width of the chute
+  L.statsY = top;                     // counter, top-left
+  L.timerY = top + 22;                // round countdown, top-center
+  L.title1 = top + 86;                // hook: small lead-in line (below the counter)
+  L.title2 = L.title1 + 44;           // hook: big gold lines
+  L.title3 = L.title2 + 46;
+  L.chuteTop = L.title3 + 40;
+  L.cy = L.chuteTop + 80 + L.R;
+  L.gapY = L.cy - Math.sqrt(L.R * L.R - L.hw * L.hw);  // where the chute meets the ring
+  L.ladderY = L.cy + L.R + 78;        // power ladder strip under the ring
+}
+
+const VIDEO_W = 1080;   // recorded video is 1080×1920 (TikTok's native size)
+
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  let cssW, cssH;
+  if (Recorder.on) {                  // recording: exact 9:16 frame, fitted to the window
+    cssH = Math.min(wh, ww * 16 / 9); cssW = cssH * 9 / 16; LH = 960;
+  } else if (wh / ww >= 16 / 9) {     // tall phone: fill the whole screen
+    cssW = ww; cssH = wh; LH = LW * wh / ww;
+  } else {                            // wider screen: 9:16 box, letterboxed in black
+    cssH = wh; cssW = wh * 9 / 16; LH = 960;
+  }
+  stage.style.width = cssW + 'px';
+  stage.style.height = cssH + 'px';
+  stage.style.setProperty('--u', (cssW / LW) + 'px');
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);   // cap for phone performance
+  scale = Recorder.on ? VIDEO_W / LW : (cssW / LW) * dpr;
+  canvas.width = Math.round(LW * scale);
+  canvas.height = Math.round(LH * scale);
+
+
+  // Keep existing balls in place relative to the arena.
+  const oldCy = L.cy;
+  layout();
+  if (oldCy !== undefined) for (const b of S.balls) b.y += L.cy - oldCy;
+
+  sprites.clear();                    // orbs are cached at device resolution
+}
+
+// shadowBlur ignores the canvas transform, so scale it manually.
+const blur = v => v * scale;
+
+/* =====================================================================
+   HELPERS
+   ===================================================================== */
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[(Math.random() * arr.length) | 0];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeOutBack = t => 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2);
+
+function rgba(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+// Set a font that fits `text` into maxW, starting from maxSize.
+function fitFont(g, text, maxW, maxSize, weight) {
+  let size = maxSize;
+  g.font = `${weight} ${size}px ${FONT}`;
+  const w = g.measureText(text).width;
+  if (w > maxW) {
+    size = Math.max(5, size * maxW / w);
+    g.font = `${weight} ${size}px ${FONT}`;
+  }
+  return size;
+}
+
+// All-time record survives reloads (silently skipped if storage is blocked).
+function loadRecord() {
+  try { return parseInt(localStorage.getItem('hxhRecord'), 10) || 0; } catch { return 0; }
+}
+function saveRecord(v) {
+  try { localStorage.setItem('hxhRecord', String(v)); } catch {}
+}
+
+/* =====================================================================
+   SOUND (Web Audio, synthesized)
+   ===================================================================== */
+
+// Major pentatonic, two octaves: every wall hit sounds musical.
+const PENTA = [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5, 1174.66, 1318.51, 1567.98, 1760.0];
+
+const Sound = {
+  ctx: null, out: null, comp: null, speaker: null, recDest: null, muted: false, lastBlip: 0,
+
+  // Called on page load (starts immediately where the browser allows autoplay)
+  // and again on every interaction, so audio starts the moment it's permitted.
+  // Graph: notes → out → compressor → speaker (mute switch) → speakers
+  //                                 ↘ recDest (video recording, ignores mute)
+  unlock() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      this.ctx = new AC();
+      this.comp = this.ctx.createDynamicsCompressor();
+      this.out = this.ctx.createGain();
+      this.out.gain.value = 0.6;
+      this.speaker = this.ctx.createGain();
+      this.speaker.gain.value = this.muted ? 0 : 1;
+      this.out.connect(this.comp);
+      this.comp.connect(this.speaker);
+      this.speaker.connect(this.ctx.destination);
+    }
+    // 'suspended' = blocked by autoplay rules; 'interrupted' = iOS paused it (e.g. a call)
+    if (this.ctx.state !== 'running' && this.ctx.state !== 'closed') this.ctx.resume().catch(() => {});
+  },
+
+  // Audio stream for the video recorder (sound is recorded even when muted).
+  recordStream() {
+    if (!this.ctx || !this.ctx.createMediaStreamDestination) return null;
+    if (!this.recDest) {
+      this.recDest = this.ctx.createMediaStreamDestination();
+      this.comp.connect(this.recDest);
+    }
+    return this.recDest.stream;
+  },
+
+  get running() { return !!this.ctx && this.ctx.state === 'running'; },
+
+  setMuted(m) {
+    this.muted = m;
+    if (this.speaker) this.speaker.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.02);
+  },
+
+  get ready() { return this.running && (!this.muted || Recorder.on); },
+
+  // One enveloped oscillator note.
+  note(freq, when, dur, type = 'sine', vol = 0.2, attack = 0.005) {
+    const c = this.ctx, t = c.currentTime + when;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.out);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+
+  // Wall bounce: pitch picked by the angle where the ball hit the ring.
+  blip(angle, strength) {
+    if (!this.ready) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastBlip < 0.045) return;     // throttle so piles don't buzz
+    this.lastBlip = now;
+    const idx = Math.floor(((angle + Math.PI) / TAU) * PENTA.length) % PENTA.length;
+    this.note(PENTA[idx], 0, 0.22, 'triangle', 0.03 + 0.09 * strength);
+  },
+
+  // Rising chime; climbs in pitch as you go further up the chain.
+  evolve(tier) {
+    if (!this.ready) return;
+    const base = (tier - 2) % 6;
+    [0, 2, 4].forEach((k, i) => {
+      const f = PENTA[Math.min(base + k, PENTA.length - 1)];
+      this.note(f, i * 0.06, 0.35, 'sine', 0.16);
+      this.note(f * 2, i * 0.06, 0.2, 'triangle', 0.04);
+    });
+  },
+
+  chord(freqs, dur, vol, stagger = 0.03) {
+    freqs.forEach((f, i) => {
+      this.note(f, i * stagger, dur, 'triangle', vol, 0.02);
+      this.note(f * 1.003, i * stagger, dur, 'sine', vol * 0.6, 0.02);  // slight detune = shimmer
+    });
+  },
+
+  sRank() {
+    if (!this.ready) return;
+    this.chord([261.63, 329.63, 392.0, 523.25, 659.25], 1.6, 0.11);
+    [1046.5, 1318.51, 1567.98, 2093.0].forEach((f, i) => this.note(f, 0.25 + i * 0.07, 0.4, 'sine', 0.05));
+  },
+
+  record() {
+    if (!this.ready) return;
+    // Low boom sweep
+    const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(140, t);
+    o.frequency.exponentialRampToValueAtTime(38, t + 0.9);
+    g.gain.setValueAtTime(0.5, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
+    o.connect(g); g.connect(this.out); o.start(t); o.stop(t + 1.2);
+    // Big stacked chord
+    this.chord([130.81, 196.0, 261.63, 329.63, 392.0, 523.25, 659.25, 783.99], 3.0, 0.08, 0.05);
+  },
+
+  overflow() {
+    if (!this.ready) return;
+    [880, 698.46, 554.37, 440].forEach((f, i) => this.note(f, i * 0.12, 0.25, 'square', 0.05));
+  },
+
+  // Countdown tick for the last few seconds
+  tick() {
+    if (!this.ready) return;
+    this.note(1760, 0, 0.08, 'square', 0.04);
+  },
+
+  // Bell when the round ends
+  timeUp() {
+    if (!this.ready) return;
+    this.chord([523.25, 659.25, 783.99, 1046.5], 2.2, 0.1, 0.0);
+    [1567.98, 1318.51, 1046.5].forEach((f, i) => this.note(f, i * 0.18, 1.2, 'sine', 0.08));
+  },
+};
+
+/* =====================================================================
+   SIMULATION STATE
+   ===================================================================== */
+
+const S = {
+  balls: [], pending: [], fx: [],
+  flash: 0, banner: null,
+  slowmo: 0,          // real seconds of slow motion left
+  spawnT: 0,          // sim seconds until the next chute spawn
+  overflowT: 0,       // sim seconds the chute has been blocked
+  resetT: 0,          // real seconds until auto-reset after OVERFLOW
+  clock: ROUND_SECONDS,   // real seconds left in the round
+  lastTick: 0,        // last whole second we ticked on
+  timeUp: false,      // round over: simulation frozen
+  time: 0, acc: 0,
+  powerUps: 0, elites: 0,
+  highest: 1,         // furthest tier reached this run
+  record: loadRecord(),   // furthest tier ever reached (persists)
+};
+
+let nextBallId = 1;
+function makeBall(def, x, y, vx = 0, vy = 0) {
+  return { id: nextBallId++, def, x, y, vx, vy, r: def.r, m: def.r * def.r,
+           age: 0, pop: 0, dead: false, kicked: false };
+}
+
+function resetSim() {
+  S.balls.length = 0; S.pending.length = 0; S.fx.length = 0;
+  S.flash = 0; S.banner = null; S.slowmo = 0;
+  S.spawnT = 0.3; S.overflowT = 0; S.resetT = 0;
+}
+
+// Fresh round: clear the arena, counters and clock.
+// (An OVERFLOW only clears the arena; the clock and round stats carry on.)
+function startRound() {
+  resetSim();
+  S.powerUps = S.elites = 0;
+  S.highest = 1;
+  S.clock = Number(params.get('seconds')) || ROUND_SECONDS;   // ?seconds=10 for quick tests
+  S.lastTick = 0;
+  S.timeUp = false;
+}
+
+function overlapsAny(x, y, r) {
+  return S.balls.some(b => (b.x - x) ** 2 + (b.y - y) ** 2 < (b.r + r) ** 2);
+}
+
+// Drop a Gon into the top of the chute.
+function spawnFromChute() {
+  const x = L.cx + rand(-1, 1) * (L.hw - START.r - 1);
+  const y = L.chuteTop + START.r + 2;
+  if (overlapsAny(x, y, START.r)) return;            // chute is clogged
+  S.balls.push(makeBall(START, x, y, rand(-40, 40), rand(20, 80)));
+}
+
+// Drop a Gon wherever the user tapped.
+function spawnAt(x, y) {
+  const b = makeBall(START, x, y, rand(-60, 60), rand(-30, 30));
+  b.kicked = true;
+  S.balls.push(b);
+}
+
+/* =====================================================================
+   PHYSICS
+   ===================================================================== */
+
+const STEP = 1 / 240;   // fixed physics step (4 substeps per 60fps frame)
+
+// Circle vs line segment (used for the chute walls and the gap corners).
+function collideSegment(b, x1, y1, x2, y2, e) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const t = clamp(((b.x - x1) * dx + (b.y - y1) * dy) / (dx * dx + dy * dy), 0, 1);
+  let nx = b.x - (x1 + dx * t), ny = b.y - (y1 + dy * t);
+  const d2 = nx * nx + ny * ny;
+  if (d2 >= b.r * b.r || d2 === 0) return;
+  const d = Math.sqrt(d2);
+  nx /= d; ny /= d;
+  b.x += nx * (b.r - d);
+  b.y += ny * (b.r - d);
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn < 0) { b.vx -= (1 + e) * vn * nx; b.vy -= (1 + e) * vn * ny; }
+}
+
+function collideWalls(b, e) {
+  // Chute walls (extend a bit above the chute top so nothing slips out sideways)
+  collideSegment(b, L.cx - L.hw, L.chuteTop - 60, L.cx - L.hw, L.gapY, e);
+  collideSegment(b, L.cx + L.hw, L.chuteTop - 60, L.cx + L.hw, L.gapY, e);
+
+  const dx = b.x - L.cx, dy = b.y - L.cy;
+  const inGap = Math.abs(dx) < L.hw && dy < 0;     // lined up with the chute opening
+
+  // Inside of the ring
+  const d = Math.hypot(dx, dy);
+  if (!inGap && d > L.R - b.r) {
+    const nx = dx / d, ny = dy / d;
+    b.x = L.cx + nx * (L.R - b.r);
+    b.y = L.cy + ny * (L.R - b.r);
+    const vn = b.vx * nx + b.vy * ny;
+    if (vn > 0) {
+      b.vx -= (1 + e) * vn * nx;
+      b.vy -= (1 + e) * vn * ny;
+      // a touch of tangential friction
+      const tx = -ny, ty = nx, vt = b.vx * tx + b.vy * ty;
+      b.vx -= vt * 0.02 * tx;
+      b.vy -= vt * 0.02 * ty;
+      if (vn > 140) Sound.blip(Math.atan2(dy, dx), Math.min(1, vn / 900));
+    }
+  }
+
+  // Lid above the chute so balls can't fly off-screen
+  if (inGap && b.y - b.r < L.chuteTop - 40) {
+    b.y = L.chuteTop - 40 + b.r;
+    if (b.vy < 0) b.vy *= -0.5;
+  }
+}
+
+function step(dt) {
+  const g = Settings.gravity, e = Settings.bounce;
+  const balls = S.balls;
+
+  // Integrate
+  for (const b of balls) {
+    b.vy += g * dt;
+    b.vx *= 0.9995; b.vy *= 0.9995;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.age += dt;
+    // Random sideways kick as a ball leaves the chute keeps things chaotic
+    if (!b.kicked && b.y > L.gapY + b.r) { b.kicked = true; b.vx += rand(-90, 90); }
+  }
+
+  // Ball vs ball: merge same character, otherwise mass-weighted elastic response
+  const n = balls.length, eb = e * 0.85;
+  for (let i = 0; i < n; i++) {
+    const a = balls[i];
+    if (a.dead) continue;
+    for (let j = i + 1; j < n; j++) {
+      const b = balls[j];
+      if (b.dead) continue;
+      const dx = b.x - a.x, dy = b.y - a.y, rs = a.r + b.r;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= rs * rs) continue;
+
+      if (a.def === b.def && a.def.next !== null) { merge(a, b); break; }
+
+      const d = Math.sqrt(d2) || 0.001;
+      const nx = dx / d, ny = dy / d, overlap = rs - d;
+      const inv = 1 / (a.m + b.m);
+      a.x -= nx * overlap * b.m * inv; a.y -= ny * overlap * b.m * inv;
+      b.x += nx * overlap * a.m * inv; b.y += ny * overlap * a.m * inv;
+
+      const rv = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+      if (rv < 0) {
+        const jImp = -(1 + eb) * rv / (1 / a.m + 1 / b.m);
+        a.vx -= jImp / a.m * nx; a.vy -= jImp / a.m * ny;
+        b.vx += jImp / b.m * nx; b.vy += jImp / b.m * ny;
+      }
+    }
+  }
+
+  // Walls last so nothing ends a step outside the arena
+  for (const b of balls) if (!b.dead) collideWalls(b, e);
+
+  // Apply merges
+  if (S.pending.length || balls.some(b => b.dead)) {
+    S.balls = balls.filter(b => !b.dead).concat(S.pending);
+    S.pending.length = 0;
+  }
+}
+
+/* =====================================================================
+   EVOLUTION
+   ===================================================================== */
+
+function merge(a, b) {
+  a.dead = b.dead = true;
+  const def = TIERS[a.def.next];
+  const x = (a.x + b.x) / 2, y = (a.y + b.y) / 2;
+  const nb = makeBall(def, x, y, (a.vx + b.vx) / 2, (a.vy + b.vy) / 2);
+  nb.kicked = true;
+  S.pending.push(nb);
+  S.powerUps++;
+  celebrate(def, x, y);
+}
+
+function addRing(x, y, r0, r1, color, life, width) {
+  S.fx.push({ kind: 'ring', x, y, r0, r1, color, life, max: life, width });
+}
+function addText(x, y, text, sub, color, size, life) {
+  S.fx.push({ kind: 'text', x, y, text, sub, color, size, life, max: life });
+}
+function addSparks(x, y, count, colors, speed) {
+  for (let i = 0; i < count; i++) {
+    const a = rand(0, TAU), s = rand(speed * 0.3, speed);
+    const life = rand(0.5, 1.0);
+    S.fx.push({ kind: 'spark', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                color: pick(colors), size: rand(1.5, 3.5), life, max: life });
+  }
+}
+
+function celebrate(def, x, y) {
+  const r = def.r;
+  // Local white pop at the merge point
+  S.fx.push({ kind: 'flash', x, y, r: r * 1.8, life: 0.18, max: 0.18 });
+  if (def.elite) S.elites++;
+
+  // Text, golden bursts and screen flashes are only for a character reached for
+  // the first time this round. Repeat merges just get a quick burst + chime.
+  const isNew = def.tier > S.highest;
+  if (!isNew) {
+    addRing(x, y, r, r * 2.4, def.color, 0.5, 5);
+    addSparks(x, y, 10, [def.color, '#fff'], 220);
+    Sound.evolve(def.tier);
+  } else if (def.elite) {
+    addRing(x, y, r, r * 3.2, def.color, 0.7, 7);
+    addRing(x, y, r, r * 5, '#FFD54A', 1.0, 10);
+    addSparks(x, y, 34, ['#FFD54A', '#FFF3B0', def.color], 420);
+    addText(x, y - r - 10, 'S-RANK!', def.name, '#FFD54A', 34, 1.5);
+    S.flash = Math.max(S.flash, 0.35);
+    Sound.evolve(def.tier);
+    Sound.sRank();
+  } else {
+    addRing(x, y, r, r * 3, def.color, 0.6, 6);
+    addSparks(x, y, 14, [def.color, '#fff'], 260);
+    addText(x, y - r - 8, 'POWER UP!', def.name, def.color, 26, 1.1);
+    S.flash = Math.max(S.flash, 0.12);
+    Sound.evolve(def.tier);
+  }
+
+  S.highest = Math.max(S.highest, def.tier);
+
+  // New all-time record far enough up the chain: the big moment
+  if (def.tier > S.record) {
+    S.record = def.tier;
+    saveRecord(S.record);
+    if (def.tier >= RECORD_MIN_TIER) {
+      for (let i = 0; i < 5; i++) {
+        addRing(x, y, r, r * (3 + i * 1.4), `hsl(${i * 72},100%,62%)`, 0.9 + i * 0.2, 12);
+      }
+      addSparks(x, y, 70, ['#FF4D4D', '#FFD54A', '#4CD964', '#4D9DFF', '#B061FF', '#fff'], 600);
+      S.flash = 0.75;
+      S.slowmo = 2.0;                                // 30% speed for 2 real seconds
+      S.banner = { text: 'NEW RECORD!', sub: `${def.num} ${def.name}`, life: 2.4, max: 2.4, rainbow: true };
+      Sound.record();
+    }
+  }
+}
+
+function endRound() {
+  S.clock = 0;
+  S.timeUp = true;
+  S.slowmo = 0;
+  S.resetT = 0;                        // an OVERFLOW in progress just stays frozen
+  const best = TIERS[S.highest - 1];
+  S.banner = { text: "TIME'S UP!", sub: `made it to ${best.num} ${best.name}`, life: 3.0, max: 3.0, gold: true };
+  S.flash = 0.35;
+  Sound.timeUp();
+}
+
+function triggerOverflow() {
+  S.resetT = 2.0;
+  const best = TIERS[S.highest - 1];
+  S.banner = { text: 'OVERFLOW!', sub: `made it to ${best.num} ${best.name}`, life: 2.0, max: 2.0, rainbow: false };
+  S.flash = 0.4;
+  Sound.overflow();
+}
+
+/* =====================================================================
+   UPDATE
+   ===================================================================== */
+
+function update(rdt) {
+  S.time += rdt;
+
+  // Real-time timers (effects stay readable during slow-mo)
+  S.slowmo = Math.max(0, S.slowmo - rdt);
+  S.flash = Math.max(0, S.flash - rdt * 2.2);
+  if (S.banner && (S.banner.life -= rdt) <= 0) S.banner = null;
+
+  // In-flight effects finish playing even after the round ends
+  for (const f of S.fx) {
+    f.life -= rdt;
+    if (f.kind === 'spark') {
+      f.x += f.vx * rdt; f.y += f.vy * rdt;
+      f.vx *= 0.97; f.vy = f.vy * 0.97 + 300 * rdt;
+    }
+  }
+  S.fx = S.fx.filter(f => f.life > 0);
+
+  // Round clock (wall-clock time, so the video is exactly 2:30)
+  if (!S.timeUp) {
+    S.clock -= rdt;
+    const whole = Math.ceil(S.clock);
+    if (whole !== S.lastTick && whole <= 5 && whole > 0) Sound.tick();
+    S.lastTick = whole;
+    if (S.clock <= 0) endRound();
+  }
+  if (S.timeUp) { Recorder.tick(rdt); return; }   // frozen: no physics, no spawns
+
+  if (S.resetT > 0) {
+    S.resetT -= rdt;
+    if (S.resetT <= 0) resetSim();
+  }
+
+  // Simulation time
+  const sdt = rdt * (S.slowmo > 0 ? 0.3 : 1);
+
+  // Spawning from the chute
+  if (S.resetT <= 0) {
+    S.spawnT -= sdt;
+    if (S.spawnT <= 0) {
+      S.spawnT += Settings.spawnInterval;
+      spawnFromChute();
+    }
+  }
+
+  // Fixed-step physics
+  S.acc += sdt;
+  let steps = 0;
+  while (S.acc >= STEP && steps < 10) { step(STEP); S.acc -= STEP; steps++; }
+  if (steps === 10) S.acc = 0;
+
+  for (const b of S.balls) b.pop = Math.min(1, b.pop + rdt / 0.28);
+
+  // Overflow: a settled ball stuck in the chute (above the ring) for 3s
+  if (S.resetT <= 0) {
+    const topY = L.cy - L.R;
+    const blocked = S.balls.some(b => b.age > 1.5 && b.y < topY);
+    S.overflowT = blocked ? S.overflowT + sdt : 0;
+    if (S.overflowT > 3) triggerOverflow();
+  }
+}
+
+/* =====================================================================
+   RENDERING
+   ===================================================================== */
+
+// Each character's orb (glow, fill, outline, labels) is pre-rendered once.
+// shadowBlur is expensive on phones; this keeps 60fps with many balls.
+const sprites = new Map();
+const SPRITE_PAD = 16;
+
+function requestImage(def) {
+  def.imgRequested = true;
+  const img = new Image();     // no crossOrigin needed: we only draw, never read pixels
+  img.onload = () => { def.img = img; sprites.delete(def.id); };
+  img.src = def.imageUrl;
+}
+
+function getSprite(def) {
+  let s = sprites.get(def.id);
+  if (s) return s;
+  if (def.imageUrl && !def.imgRequested) requestImage(def);
+
+  const r = def.r, size = (r + SPRITE_PAD) * 2;
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  g.scale(c.width / size, c.height / size);
+  g.translate(size / 2, size / 2);
+
+  // Dark translucent body with a soft colored sheen
+  g.beginPath(); g.arc(0, 0, r, 0, TAU);
+  g.fillStyle = 'rgba(0,0,0,0.6)';
+  g.fill();
+  const grad = g.createRadialGradient(-r * 0.3, -r * 0.35, r * 0.1, 0, 0, r);
+  grad.addColorStop(0, rgba(def.color, 0.45));
+  grad.addColorStop(1, rgba(def.color, 0.12));
+  g.fillStyle = grad;
+  g.fill();
+
+  if (def.img) {
+    // Optional sprite image clipped inside the orb
+    g.save();
+    g.beginPath(); g.arc(0, 0, r - 3, 0, TAU); g.clip();
+    const iw = def.img.naturalWidth, ih = def.img.naturalHeight;
+    const k = (2 * (r - 3)) / Math.min(iw, ih);
+    g.drawImage(def.img, -iw * k / 2, -ih * k / 2, iw * k, ih * k);
+    g.restore();
+  } else {
+    drawLabels(g, def);
+  }
+
+  // Neon outline
+  g.beginPath(); g.arc(0, 0, r - 1.5, 0, TAU);
+  g.shadowColor = def.color;
+  g.shadowBlur = 12 * scale;
+  g.strokeStyle = def.color;
+  g.lineWidth = def.elite ? 4 : 3;
+  g.stroke(); g.stroke();
+  g.shadowBlur = 0;
+  g.strokeStyle = def.elite ? 'rgba(255,229,140,0.9)' : 'rgba(255,255,255,0.5)';  // gold rim on S-rank characters
+  g.lineWidth = def.elite ? 1.5 : 1;
+  g.stroke();
+
+  s = { canvas: c, size };
+  sprites.set(def.id, s);
+  return s;
+}
+
+function drawLabels(g, def) {
+  const r = def.r, maxW = r * 1.8;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+
+  fitFont(g, def.name, maxW, r * 0.46, 800);
+  g.fillStyle = '#fff';
+  g.shadowColor = def.color; g.shadowBlur = 6 * scale;
+  g.fillText(def.name, 0, -r * 0.06);
+
+  const label = `${def.num} ${def.type.toUpperCase()}`;
+  fitFont(g, label, maxW * 0.8, r * 0.24, 700);
+  g.shadowBlur = 0;
+  g.fillStyle = def.color;
+  g.fillText(label, 0, r * 0.42);
+}
+
+function drawBall(b) {
+  const sp = getSprite(b.def);
+  const k = b.pop < 1 ? 0.6 + 0.4 * easeOutBack(b.pop) : 1;
+  const size = sp.size * k;
+  ctx.drawImage(sp.canvas, b.x - size / 2, b.y - size / 2, size, size);
+}
+
+// The hook: a comment prompt at the top for retention.
+// First line is a smaller white lead-in, the rest is big neon gold.
+const HOOK = ['Comment below 👇', 'Who will be the', 'STRONGEST?'];
+
+function drawTitle() {
+  const hue = (S.time * 25) % 360;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = `hsl(${hue},100%,60%)`;
+  ctx.shadowBlur = blur(18);
+
+  fitFont(ctx, HOOK[0], 500, 30, 900);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(HOOK[0], L.cx, L.title1);
+
+  ctx.shadowColor = '#FFB300';
+  [L.title2, L.title3].forEach((y, i) => {
+    const text = HOOK[i + 1];
+    fitFont(ctx, text, 500, 46, 900);
+    const gold = ctx.createLinearGradient(0, y - 22, 0, y + 22);
+    gold.addColorStop(0, '#FFF3B0');
+    gold.addColorStop(1, '#FFB300');
+    ctx.fillStyle = gold;
+    ctx.fillText(text, L.cx, y);
+  });
+  ctx.restore();
+}
+
+function drawArena() {
+  const RW = 12;                       // ring thickness
+  const rr = L.R + RW / 2;             // stroke centerline so the inner edge = L.R
+  const hx = L.hw + RW / 2;
+  const ga = Math.asin(hx / rr);       // half-angle of the gap
+  const joinY = L.cy - rr * Math.cos(ga);
+  const hue = (S.time * 30) % 360;
+
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+
+  // One path: left chute wall → around the ring (long way) → right chute wall
+  ctx.beginPath();
+  ctx.moveTo(L.cx - hx, L.chuteTop);
+  ctx.lineTo(L.cx - hx, joinY);
+  ctx.arc(L.cx, L.cy, rr, -Math.PI / 2 - ga, -Math.PI / 2 + ga, true);
+  ctx.lineTo(L.cx + hx, L.chuteTop);
+
+  // Outer glow tube
+  ctx.strokeStyle = `hsl(${hue},100%,58%)`;
+  ctx.shadowColor = `hsl(${hue},100%,55%)`;
+  ctx.shadowBlur = blur(30);
+  ctx.lineWidth = RW;
+  ctx.stroke();
+  // Bright core
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = `hsl(${hue},100%,85%)`;
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Power ladder strip: last few reached levels, then "?" for what's next.
+function drawLadder() {
+  const hi = S.highest;
+  const first = Math.max(1, hi - 3);
+  const last = Math.min(TIERS.length, first + 5);
+  const gap = 66, mr = 19;
+  const x0 = L.cx - (last - first) * gap / 2, y = L.ladderY;
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.font = `800 12px ${FONT}`;
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.fillText('P O W E R   L A D D E R', L.cx, y - 38);
+
+  for (let t = first; t <= last; t++) {
+    const def = TIERS[t - 1], x = x0 + (t - first) * gap;
+
+    // Chevron between entries
+    if (t > first) {
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.font = `800 14px ${FONT}`;
+      ctx.fillText('›', x - gap / 2, y);
+    }
+
+    if (t <= hi) {
+      const sp = getSprite(def), size = sp.size * mr / def.r;
+      ctx.drawImage(sp.canvas, x - size / 2, y - size / 2, size, size);
+      if (t === hi) {                  // pulsing marker on the current best
+        ctx.strokeStyle = '#FFD54A';
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.5 + 0.5 * Math.sin(S.time * 5);
+        ctx.beginPath(); ctx.arc(x, y, mr + 6, 0, TAU); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      ctx.fillStyle = def.color;
+      fitFont(ctx, def.num, gap - 6, 11, 800);
+      ctx.fillText(def.num, x, y + mr + 13);
+    } else {
+      ctx.setLineDash([3, 4]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, mr, 0, TAU); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font = `900 16px ${FONT}`;
+      ctx.fillText('?', x, y + 1);
+      ctx.font = `800 11px ${FONT}`;
+      ctx.fillText(def.num, x, y + mr + 13);
+    }
+  }
+  ctx.restore();
+}
+
+function drawFx() {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  for (const f of S.fx) {
+    const t = 1 - f.life / f.max;      // 0 → 1 over the effect's life
+
+    if (f.kind === 'ring') {
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = f.color;
+      ctx.shadowColor = f.color;
+      ctx.shadowBlur = blur(16);
+      ctx.lineWidth = f.width * (1 - t) + 1;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r0 + (f.r1 - f.r0) * easeOut(t), 0, TAU);
+      ctx.stroke();
+    } else if (f.kind === 'spark') {
+      ctx.globalAlpha = 1 - t;
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = f.color;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.size, 0, TAU); ctx.fill();
+    } else if (f.kind === 'flash') {
+      ctx.globalAlpha = (1 - t) * 0.9;
+      ctx.shadowBlur = 0;
+      const g = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r);
+      g.addColorStop(0, '#fff');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, TAU); ctx.fill();
+    }
+  }
+
+  // Floating text drawn normally so it stays legible
+  ctx.globalCompositeOperation = 'source-over';
+  for (const f of S.fx) {
+    if (f.kind !== 'text') continue;
+    const t = 1 - f.life / f.max;
+    const pop = t < 0.15 ? 0.6 + 0.4 * easeOutBack(t / 0.15) : 1;
+    ctx.globalAlpha = t < 0.7 ? 1 : (1 - t) / 0.3;
+    const y = f.y - 55 * easeOut(t);
+
+    ctx.font = `900 ${f.size * pop}px ${FONT}`;
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.shadowBlur = 0;
+    ctx.strokeText(f.text, f.x, y);
+    ctx.fillStyle = f.color;
+    ctx.shadowColor = f.color;
+    ctx.shadowBlur = blur(14);
+    ctx.fillText(f.text, f.x, y);
+
+    if (f.sub) {                       // the character it just became
+      const sy = y + f.size * 0.8;
+      ctx.font = `800 ${f.size * 0.55 * pop}px ${FONT}`;
+      ctx.shadowBlur = 0;
+      ctx.lineWidth = 4;
+      ctx.strokeText(f.sub, f.x, sy);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(f.sub, f.x, sy);
+    }
+  }
+  ctx.restore();
+}
+
+function drawBanner() {
+  const B = S.banner;
+  if (!B) return;
+  const t = 1 - B.life / B.max;
+  const fadeOut = Math.min(1, B.life / 0.4);
+  const pop = t < 0.12 ? 0.3 + 0.7 * easeOutBack(t / 0.12) : 1;
+  const y = L.cy - 30;
+
+  ctx.save();
+  ctx.globalAlpha = fadeOut;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.translate(L.cx, y);
+  ctx.scale(pop, pop);
+
+  // Dark band behind the text
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(-LW / 2, -48, LW, 112);
+
+  fitFont(ctx, B.text, 500, 60, 900);
+  let fill;
+  if (B.rainbow) {
+    fill = ctx.createLinearGradient(-250, 0, 250, 0);
+    const shift = S.time * 120;
+    for (let i = 0; i <= 6; i++) fill.addColorStop(i / 6, `hsl(${(i * 60 + shift) % 360},100%,62%)`);
+    ctx.shadowColor = '#fff';
+  } else if (B.gold) {
+    fill = ctx.createLinearGradient(0, -30, 0, 30);
+    fill.addColorStop(0, '#FFF3B0');
+    fill.addColorStop(1, '#FFB300');
+    ctx.shadowColor = '#FFB300';
+  } else {
+    const on = Math.floor(S.time * 8) % 2 === 0;
+    fill = on ? '#FF3B5C' : '#FF8FA3';
+    ctx.shadowColor = '#FF3B5C';
+  }
+  ctx.shadowBlur = blur(24);
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+  ctx.strokeText(B.text, 0, 0);
+  ctx.fillStyle = fill;
+  ctx.fillText(B.text, 0, 0);
+
+  if (B.sub) {
+    fitFont(ctx, B.sub, 440, 26, 800);
+    ctx.shadowBlur = blur(10);
+    ctx.fillStyle = B.rainbow ? '#FFD54A' : '#fff';
+    ctx.shadowColor = B.gold ? '#FFB300' : ctx.shadowColor;
+    ctx.fillText(B.sub, 0, 44);
+  }
+  ctx.restore();
+}
+
+// Round countdown at the top: white, red + pulsing for the last 10s, gold at 0:00.
+function drawTimer() {
+  const secs = Math.max(0, Math.ceil(S.clock));
+  const text = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  const urgent = !S.timeUp && S.clock <= 10;
+  const color = S.timeUp ? '#FFD54A' : urgent ? '#FF3B5C' : '#FFFFFF';
+  const pulse = urgent ? 1 + 0.12 * Math.pow(S.clock - Math.floor(S.clock), 3) : 1;
+
+  ctx.save();
+  ctx.translate(L.cx, L.timerY);
+  ctx.scale(pulse, pulse);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `900 36px ${FONT}`;
+
+  // Fixed-width digit slots so the numbers don't jiggle as they change
+  const slot = ctx.measureText('0').width, colon = ctx.measureText(':').width;
+  const widths = [...text].map(ch => ch === ':' ? colon : slot);
+  let x = -widths.reduce((a, w) => a + w, 0) / 2;
+
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = blur(S.timeUp ? 20 : 12);
+  [...text].forEach((ch, i) => {
+    ctx.fillText(ch, x + widths[i] / 2, 0);
+    x += widths[i];
+  });
+  ctx.restore();
+}
+
+// Round counter, top-left (drawn on the canvas so it's in recorded videos).
+function drawStats() {
+  const name = t => `${TIERS[t - 1].name.toUpperCase()} ${TIERS[t - 1].num}`;
+  const rows = [
+    ['POWER UPS', String(S.powerUps)],
+    ['S-RANKS', String(S.elites)],
+    ['HIGHEST', name(S.highest)],
+    ['RECORD', S.record ? name(S.record) : '—'],
+  ];
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = `800 12px ${FONT}`;
+  let y = L.statsY;
+  for (const [label, val] of rows) {
+    ctx.fillStyle = '#fff';
+    ctx.shadowColor = 'rgba(255,255,255,0.6)';
+    ctx.shadowBlur = blur(6);
+    ctx.fillText(label, 14, y);
+    const x = 14 + ctx.measureText(label + ' ').width;
+    ctx.fillStyle = '#FFD54A';
+    ctx.shadowColor = '#FFB300';
+    ctx.shadowBlur = blur(8);
+    ctx.fillText(val, x, y);
+    y += 16;
+  }
+  ctx.restore();
+}
+
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+
+  drawStats();
+  drawTimer();
+  drawTitle();
+  drawArena();
+  for (const b of S.balls) drawBall(b);
+  drawLadder();
+  drawFx();
+
+  if (S.flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${S.flash})`;
+    ctx.fillRect(0, 0, LW, LH);
+  }
+  drawBanner();
+}
+
+/* =====================================================================
+   VIDEO RECORDING
+   Records one full round straight from the canvas (1080×1920, 60fps, with
+   sound), keeps going a few seconds into the freeze, then saves the file.
+   ===================================================================== */
+
+const params = new URLSearchParams(location.search);
+// ?upload=/path  → POST the finished video to this same-origin path instead of
+// downloading it (used by render.py). ?autorecord → start on load.
+const UPLOAD_PATH = /^\/(?!\/)/.test(params.get('upload') || '') ? params.get('upload') : null;
+
+const Recorder = {
+  on: false, rec: null, chunks: [], tail: 0, startedAt: 0, frames: 0,
+  TAIL_SECONDS: 3.5,        // how long to keep filming the frozen end screen
+
+  // Best format this browser can record: MP4 (H.264/AAC) first, WebM fallback.
+  pickMime() {
+    const types = [
+      'video/mp4;codecs=avc1.64002A,mp4a.40.2',
+      'video/mp4;codecs=avc1,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+    return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  },
+
+  start() {
+    if (this.on) return;
+    if (!window.MediaRecorder || !canvas.captureStream) {
+      alert("This browser can't record video. Try Chrome or Safari on a computer.");
+      return;
+    }
+    Sound.unlock();
+    this.on = true;
+    resize();                 // lock the canvas to 1080×1920
+    startRound();
+    draw();
+
+    const stream = canvas.captureStream(60);
+    const audio = Sound.recordStream();
+    if (audio) audio.getAudioTracks().forEach(t => stream.addTrack(t));
+
+    const mimeType = this.pickMime();
+    const opts = { videoBitsPerSecond: 8_000_000, audioBitsPerSecond: 192_000 };
+    if (mimeType) opts.mimeType = mimeType;
+    this.rec = new MediaRecorder(stream, opts);
+    this.chunks = [];
+    this.rec.ondataavailable = e => { if (e.data.size) this.chunks.push(e.data); };
+    this.rec.onstop = () => this.save();
+    this.rec.start(1000);
+
+    this.tail = this.TAIL_SECONDS;
+    this.startedAt = performance.now();
+    this.frames = 0;
+    $('recBtn').classList.add('on');
+    $('recBtn').textContent = '⏹';
+    $('recBadge').hidden = false;
+  },
+
+  // Called every frame once the round is over: film the freeze, then stop.
+  tick(rdt) {
+    if (!this.rec) return;
+    this.tail -= rdt;
+    if (this.tail <= 0) this.stop();
+  },
+
+  stop() {
+    if (this.rec && this.rec.state !== 'inactive') this.rec.stop();
+  },
+
+  save() {
+    const type = this.rec.mimeType || 'video/webm';
+    const blob = new Blob(this.chunks, { type });
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const name = `hunter-x-hunter-${stamp}.${ext}`;
+    const secs = (performance.now() - this.startedAt) / 1000;
+    const fps = (this.frames / secs).toFixed(1);
+
+    this.rec = null;
+    this.chunks = [];
+    this.on = false;
+    resize();                 // back to the normal screen layout
+    $('recBtn').classList.remove('on');
+    $('recBtn').textContent = '⏺';
+    $('recBadge').hidden = true;
+
+    if (UPLOAD_PATH) {
+      fetch(`${UPLOAD_PATH}?name=${encodeURIComponent(name)}&fps=${fps}`, { method: 'POST', body: blob });
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  },
+
+  // On-screen REC badge with elapsed time.
+  frame() {
+    if (!this.on) return;
+    this.frames++;
+    const s = Math.floor((performance.now() - this.startedAt) / 1000);
+    const text = `● REC ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    const badge = $('recBadge');
+    if (badge.textContent !== text) badge.textContent = text;
+  },
+};
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+
+$('recBtn').addEventListener('click', () => (Recorder.on ? Recorder.stop() : Recorder.start()));
+
+// Tap inside the ring = manual drop
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width * LW;
+  const y = (e.clientY - rect.top) / rect.height * LH;
+  if (Math.hypot(x - L.cx, y - L.cy) < L.R - START.r && S.resetT <= 0 && !S.timeUp) spawnAt(x, y);
+});
+
+// Audio starts on load if the browser allows it. If it's blocked, any touch,
+// click or key press starts it (different browsers count different events).
+for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) {
+  window.addEventListener(ev, () => Sound.unlock(), { capture: true });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Sound.unlock(); });
+
+const muteBtn = $('muteBtn');
+function toggleMute() {
+  Sound.setMuted(!Sound.muted);
+  muteBtn.textContent = Sound.muted ? '🔇' : '🔊';
+}
+muteBtn.addEventListener('click', toggleMute);
+
+const panel = $('panel');
+$('setBtn').addEventListener('click', () => { panel.hidden = !panel.hidden; });
+$('closeBtn').addEventListener('click', () => { panel.hidden = true; });
+$('resetBtn').addEventListener('click', () => { startRound(); panel.hidden = true; });
+$('clearBtn').addEventListener('click', () => { S.record = 0; saveRecord(0); });
+
+// Bind a slider to a Settings key with a formatted readout
+function bindSlider(inputId, labelId, key, fmt) {
+  const input = $(inputId), label = $(labelId);
+  input.value = Settings[key];
+  label.textContent = fmt(Settings[key]);
+  input.addEventListener('input', () => {
+    Settings[key] = parseFloat(input.value);
+    label.textContent = fmt(Settings[key]);
+  });
+}
+bindSlider('inSpawn', 'vSpawn', 'spawnInterval', v => v.toFixed(2) + 's');
+bindSlider('inGrav', 'vGrav', 'gravity', v => String(Math.round(v)));
+bindSlider('inBounce', 'vBounce', 'bounce', v => v.toFixed(2));
+
+// Keyboard shortcuts for desktop recording: M = mute, R = reset
+window.addEventListener('keydown', e => {
+  if (e.key === 'm' || e.key === 'M') toggleMute();
+  if (e.key === 'r' || e.key === 'R') startRound();
+});
+
+window.addEventListener('resize', resize);
+
+/* =====================================================================
+   MAIN LOOP
+   ===================================================================== */
+
+resize();
+startRound();
+Sound.unlock();     // try to start sound right away
+if (params.has('autorecord')) Recorder.start();
+
+let lastT = performance.now();
+function frame(now) {
+  const rdt = Math.min((now - lastT) / 1000, 1 / 20);   // clamp after tab switches
+  lastT = now;
+  update(rdt);
+  draw();
+  Recorder.frame();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

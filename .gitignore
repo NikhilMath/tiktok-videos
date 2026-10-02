@@ -3,3 +3,7 @@ renders/
 
 # macOS Finder metadata
 .DS_Store
+
+# Python
+.venv/
+__pycache__/

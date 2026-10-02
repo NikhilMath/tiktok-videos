@@ -32,7 +32,8 @@ tiktok-videos/
 │   ├── 03-sonic.html
 │   ├── 04-dragon-ball.html
 │   ├── 05-naruto.html
-│   └── 06-one-piece.html
+│   ├── 06-one-piece.html
+│   └── 07-brainrot-race.html
 ├── tools/
 │   └── render.py        ← records a video page to an MP4
 ├── ball-battle/         ← separate Python generator: two weapon balls fight (see ball-battle/README.md)
@@ -146,6 +147,11 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 - **Browsers block sound until the first tap.** Pages try to start sound on load anyway, and the render uses a Chrome flag to allow it. Phones still need one tap.
 - **`localStorage` can be blocked** (private mode, `file://`/`data:` previews), so always wrap it in `try/catch`.
 - **Balancing:** fixed enemy strength tends to tip into "enemies always win" or "the swarm always wins". Scaling with the game state fixed it in 05-naruto, where villain HP grows with the clone count.
+- **Anything applied every physics step must be tiny.** Physics runs 240 times a second, so a "small" rolling friction of 0.02 per step made every marble in 07 crawl at about 60 units/s. 0.0015 is right.
+- **Marble tracks jam where a ramp drops onto the next one.** A column of marbles wedges between the wall and the end of the upper ramp. Keep the gap wide, leave headroom under each ramp end, and nudge a stuck marble *sideways along its ramp*, not straight up (kicking everything up just rebuilds the jam).
+- **Moving obstacles need an escape window.** 07's swinging pizzas first blocked the track for the whole swing and trapped marbles in a loop. They now rise clear of the track at the ends of each swing and aren't bouncy.
+- **Don't give a method the same name as a property.** `Sound.out()` was silently replaced by the `Sound.out` gain node, so the first elimination threw.
+- **Previewing in the Claude desktop app:** its preview server can't read `~/Documents` (a macOS permission). Start `python3 -m http.server 8765` in a terminal instead; `.claude/launch.json` has a "site" entry that attaches to it.
 
 ---
 
@@ -159,6 +165,7 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 | 04 | `videos/04-dragon-ball.html` | Comment below 👇 Who will win the TOURNAMENT? | Any of the 12 can win; about 40% end in a decision with 2 left |
 | 05 | `videos/05-naruto.html` | Comment below 👇 How many CLONES at the end? | Anywhere from about 5 to 220 clones |
 | 06 | `videos/06-one-piece.html` | Comment below 👇 What will the MAX BOUNTY be? | Luffy ฿3B (about 58%) or Zoro ฿1.111B, often decided in the last 20 seconds |
+| 07 | `videos/07-brainrot-race.html` | Comment below 👇 Which BRAINROT WINS the RACE? | Any of the 12 can win (each about 7–11% over 300 simulated rounds); decided 2–8s before 0:00 |
 
 ### 01 · Pokémon: Pokédex evolution chain
 - **Look:** neon on black, a glowing ring that cycles through rainbow colors, a chute at the top.
@@ -219,6 +226,19 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 - **Sound:** coin clinks on merges, wooden knocks on walls, shanty fanfares, wind and thunder, cannon booms, ocean swells, ship's bell.
 - **Bands:** the first video with the shorter ~285px bottom band.
 
+### 07 · Italian Brainrot: marble race (elimination heats)
+- **Why:** marble races are one of the biggest sim trends on TikTok, and the user picked Italian brainrot characters.
+- **Look:** **claymation**. Pastel Tuscan diorama (sky, clay sun and clouds, rolling hills, cypress trees, a tiny leaning tower) with chunky rounded clay lettering (Arial Rounded), soft drop shadows, and marbles that squash and stretch on hard hits.
+- **Racers (drawn in code, each marble *is* the character):** Tralalero Tralala, Tung Tung Tung Sahur, Bombardiro Crocodilo, Brr Brr Patapim, Lirilì Larilà, Ballerina Cappuccina, Cappuccino Assassino, Chimpanzini Bananini, Trippi Troppi, Boneca Ambalabu, Bombombini Gusini, La Vaca Saturno Saturnita.
+- **Game:** every ~10s is a new **floor** (a heat). Survivors drop from a striped café starting box down a stack of ramps, and the finish door is always on the left. When all but one are through, the door slams and the last one gets squashed flat: **OUT!** (sad trombone). The final is a 1v1.
+  - **Floors** are built from modules: Olive Plinko, Meatball Mountain, Trapdoor Trattoria, Spaghetti Stairs, Pizza Pendulums, Espresso Express (boost pads), Mamma Mia Mix, Olive Drop, and the Gran Finale.
+  - **Special moves** every second or two (racers at the back use them more): sneaker sprint, TUNG TUNG TUNG bonk, Bombardiro's bomb, Patapim's stomp, Lirilì stops time, Bananini's banana peel, Saturnita pulls rivals back, and so on. Tap a marble to trigger its move.
+  - **TRACK FLIP!** On some floors one ramp tilts the other way mid-race (the leader's, if it can).
+- **Schedule:** `planHeat()` estimates how long the remaining races take (`raceBase + raceEach × racers`, times each floor's `pace`). Spare time becomes a longer wait in the starting box. If the clock runs short it picks quick floors, or makes the last 2 (or 3) go out at once ("DOUBLE OUT!", about once a round).
+- **Physics:** unlike 01–06, marbles roll on capsule-shaped line segments (ramps, walls, trapdoors, a flipping ramp), with the segment's own motion passed on to the marble.
+- **Sound:** a quiet tarantella (mandolin oom-pa-pa in A minor), clay thocks and plops, mandolin notes on olive pegs, boings, a sad trombone on every elimination, a goose honk, a bomb whistle.
+- **Bands:** standard (top 110, bottom 142). The right wall sits at x = 476 so the action stays clear of TikTok's like/comment buttons.
+
 ### Ball Battle (Python generator, `ball-battle/`)
 - **What it is:** a separate tool, made from the user's own spec, so its rules differ from the HTML videos.
 - **Video:** 30–60 second fights, an end freeze of 2 seconds, and a layout that keeps clear of TikTok's bottom 20% and right edge.
@@ -238,8 +258,15 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 | 04 | Manga/comic paper, ink, halftone | Square stage, top-down | Battle royale with HP, K.O.s, power-up pickups | Punchy hits, booms, risers |
 | 05 | Red-moon horror-fantasy, glitch flashes | The moon, swirling vortex | Swarm growth vs. enemy waves (guess the number) | Taiko loop, poofs, drones |
 | 06 | Treasure map, wooden ship's wheel, wanted posters | Wheel and chute, gravity, sea inside | Merge chain (the user asked for 01's game) + sea events | Coins, wood knocks, shanty, ocean |
+| 07 | Claymation: pastel clay diorama, squash & stretch | Vertical stack of ramps, rebuilt every floor | Marble race in elimination heats (last one out) + special moves, track flips | Tarantella mandolin, boings, plops, sad trombone |
 | Ball Battle | Dark neon arena, glow and trails (Python) | Circle, no gravity, +5% speed per bounce | 1v1 spinning-weapon duel with HP | Generated blips, thuds, metal clangs |
 
 **Not used yet:**
-- **Looks:** pixel-art/retro 16-bit, chalkboard doodle, vaporwave, underwater, blueprint, stained glass, claymation-like soft shapes, newspaper print.
-- **Mechanics:** marble race to a finish line, elimination bracket, king of the hill (stay in a shrinking zone), tug-of-war, gravity flips, a survival countdown where items fall from the sky, territory painting (who covers the most area).
+- **Looks:** pixel-art/retro 16-bit, chalkboard doodle, vaporwave, underwater, blueprint, stained glass, newspaper print.
+- **Mechanics:** elimination bracket (head-to-head), king of the hill (stay in a shrinking zone), tug-of-war, gravity flips, a survival countdown where items fall from the sky, territory painting (who covers the most area).
+
+**Next up** (trending ideas the user liked, 2026-10-02; 07 was the first of them):
+- **Escape the rings:** balls in ~50 spinning rings with gaps; each escape breaks a ring and adds balls. "How many rings will break?" Look: vaporwave.
+- **Domain Expansion war** (Jujutsu Kaisen): Gojo, Sukuna, Megumi and Mahito paint territory; DOMAIN EXPANSION paints a big circle. "Who owns the most territory?" Look: stained glass.
+- **Pokémon type war:** rock-paper-scissors swarms (fire > grass > water > fire). "Which starter takes over?" Look: Game Boy pixel art.
+- **Horse Race Test:** horses bounce through a maze toward a carrot. "Which horse gets the carrot?" Look: blueprint or newspaper print.

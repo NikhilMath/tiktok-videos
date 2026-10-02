@@ -1,0 +1,2696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Brainrot Marble Race: Which Brainrot Wins?</title>
+<style>
+  /* ---------- Page shell: black, no scrolling, stage centered ---------- */
+  html, body {
+    margin: 0; height: 100%; background: #000; overflow: hidden;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+
+  /* The stage is sized by JS to a 9:16 (or taller) portrait box.
+     --u = CSS pixels per logical unit (logical width is 540). */
+  #stage { position: relative; --u: 1px; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  /* ---------- Recording indicator (on screen only, not in the video) ---------- */
+  #recBadge {
+    position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + var(--u) * 14);
+    transform: translateX(-50%); padding: calc(var(--u) * 6) calc(var(--u) * 14);
+    border-radius: 999px; background: rgba(230, 57, 70, 0.92); color: #fff;
+    font: 800 calc(var(--u) * 14) system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: 0.08em; pointer-events: none;
+  }
+  #recBadge[hidden] { display: none; }
+
+  /* ---------- Buttons (record / mute / settings), soft clay style ---------- */
+  #btns {
+    position: absolute;
+    right: calc(var(--u) * 12);
+    top: calc(env(safe-area-inset-top, 0px) + var(--u) * 10);
+    display: flex; gap: calc(var(--u) * 8);
+  }
+  .iconBtn {
+    width: calc(var(--u) * 38); height: calc(var(--u) * 38);
+    border-radius: 50%; border: 3px solid #3A2420;
+    background: #FFE3A3; color: #3A2420; cursor: pointer;
+    font-size: calc(var(--u) * 16); line-height: 1; padding: 0;
+    box-shadow: 0 calc(var(--u) * 3) 0 #3A2420;
+  }
+  #recBtn.on { background: #E63946; color: #fff; }
+
+  /* ---------- Settings panel (clay plaque) ---------- */
+  #panel {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: calc(var(--u) * 380); padding: calc(var(--u) * 20);
+    background: #FFF1D6; border: 4px solid #3A2420; border-radius: calc(var(--u) * 22);
+    box-shadow: 0 calc(var(--u) * 6) 0 #3A2420;
+    color: #3A2420; font: 700 calc(var(--u) * 15) "Arial Rounded MT Bold", "Arial Black", system-ui, sans-serif;
+  }
+  #panel[hidden] { display: none; }
+  #panel h2 { margin: 0 0 calc(var(--u) * 14); font-size: calc(var(--u) * 24); text-align: center; letter-spacing: 0.08em; }
+  #panel label { display: block; margin-bottom: calc(var(--u) * 14); }
+  #panel label span { float: right; color: #E63946; }
+  #panel input[type=range] { width: 100%; margin-top: calc(var(--u) * 6); accent-color: #F28C28; }
+  .row { display: flex; gap: calc(var(--u) * 10); margin-top: calc(var(--u) * 6); }
+  .row button {
+    flex: 1; padding: calc(var(--u) * 10); cursor: pointer; border-radius: 999px;
+    font: 700 calc(var(--u) * 14) "Arial Rounded MT Bold", "Arial Black", system-ui, sans-serif; letter-spacing: 0.04em;
+    color: #FFF7EA; background: #F28C28; border: 3px solid #3A2420;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="recBadge" hidden>● REC 0:00</div>
+
+  <div id="btns">
+    <button class="iconBtn" id="recBtn" aria-label="Record a video">⏺</button>
+    <button class="iconBtn" id="muteBtn" aria-label="Toggle sound">🔊</button>
+    <button class="iconBtn" id="setBtn" aria-label="Settings">⚙️</button>
+  </div>
+
+  <div id="panel" hidden>
+    <h2>SETTINGS</h2>
+    <label>Gravity <span id="vGrav"></span>
+      <input id="inGrav" type="range" min="1000" max="3000" step="50">
+    </label>
+    <label>Bounciness <span id="vBounce"></span>
+      <input id="inBounce" type="range" min="0.05" max="0.8" step="0.05">
+    </label>
+    <label>Special moves <span id="vMoves"></span>
+      <input id="inMoves" type="range" min="0" max="2" step="0.1">
+    </label>
+    <div class="row">
+      <button id="resetBtn">RESTART</button>
+      <button id="closeBtn">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   CONFIG
+   ===================================================================== */
+
+const TAU = Math.PI * 2;
+const DEG = Math.PI / 180;
+const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+const CLAY = '"Arial Rounded MT Bold", "Arial Rounded MT", "Arial Black", "Helvetica Neue", Helvetica, Arial, sans-serif';
+const INK = '#3A2420';      // soft dark-brown outline (clay, not pure black)
+const CREAM = '#FFF7EA';
+
+// Length of one round. When the clock hits 0:00 everything freezes in place.
+const ROUND_SECONDS = 120;   // 2:00
+
+// Solid black bands at the top and bottom so TikTok's UI never covers the
+// action: 220px on top, ~285px at the bottom of the 1920px video.
+const TOP_SPACE = 110;
+const BOTTOM_SPACE = 142;
+
+// The hook: a comment prompt + question at the top for retention.
+const HOOK = ['Comment below 👇', 'Which BRAINROT', 'WINS the RACE?'];
+
+/* The 12 racers. Each marble IS the character, drawn in code (see FACES).
+   move = the shout when they use their special move; ability = what it does. */
+const RACERS = [
+  { id: 'tralalero',  name: 'Tralalero Tralala',         color: '#4F8FD6', move: 'TRALALERO TRALALA!', ability: 'sprint' },
+  { id: 'tung',       name: 'Tung Tung Tung Sahur',      color: '#C98A4B', move: 'TUNG TUNG TUNG!',    ability: 'bonk' },
+  { id: 'bombardiro', name: 'Bombardiro Crocodilo',      color: '#4E9A3A', move: 'BOMBARDIRO!',        ability: 'bomb' },
+  { id: 'patapim',    name: 'Brr Brr Patapim',           color: '#8DBE4A', move: 'BRR BRR PATAPIM!',   ability: 'stomp' },
+  { id: 'lirili',     name: 'Lirilì Larilà',             color: '#8E9AA6', move: 'LIRILÌ LARILÀ!',     ability: 'freeze' },
+  { id: 'ballerina',  name: 'Ballerina Cappuccina',      color: '#F27BB0', move: 'MI MI MI!',          ability: 'spin' },
+  { id: 'assassino',  name: 'Cappuccino Assassino',      color: '#7A4B2A', move: 'ASSASSINO!',         ability: 'dash' },
+  { id: 'bananini',   name: 'Chimpanzini Bananini',      color: '#E8B923', move: 'BANANINI!',          ability: 'banana' },
+  { id: 'trippi',     name: 'Trippi Troppi',             color: '#F2765A', move: 'TRIPPI TROPPI!',     ability: 'hop' },
+  { id: 'boneca',     name: 'Boneca Ambalabu',           color: '#3FA060', move: 'AMBALABU!',          ability: 'tire' },
+  { id: 'gusini',     name: 'Bombombini Gusini',         color: '#9AA7B4', move: 'BOMBOMBINI GUSINI!', ability: 'jet' },
+  { id: 'saturnita',  name: 'La Vaca Saturno Saturnita', color: '#A879D6', move: 'SATURNITA!',         ability: 'gravity' },
+];
+
+/* Track geometry, in track units: x matches the screen (0–540), y = 0 is the top
+   of the track area. The right wall sits at 476 so the action stays clear of
+   TikTok's like/comment buttons, and the finish door is always on the left. */
+const R = 16;                     // marble radius
+const T = 10;                     // thickness of ramps and walls
+const AX0 = 24, AX1 = 476;        // center lines of the left/right walls
+const TCX = (AX0 + AX1) / 2;      // middle of the track
+const GAP = 66;                   // opening at the low end of each ramp
+const TRACK_OFFSET = 176;         // track starts this far below the top band
+const TH = 960 - TOP_SPACE - BOTTOM_SPACE - TRACK_OFFSET;   // track height (532)
+const PEN_H = 78;                 // starting box at the top
+const PEGS_H = 226;               // olive Plinko field + its catching ramp
+const PEG_FIELD = 122;            // the Plinko part of PEGS_H
+
+const RAMP_COLORS = ['#FF8A5B', '#4FC1E9', '#A0D468', '#FFCE54', '#ED5565', '#AC92EC', '#48CFAD', '#EC87C0'];
+
+/* Every floor (one heat) is built from stacked modules, top to bottom:
+   'pegs' = olive Plinko, 'finish:x' = last ramp into the finish door, anything
+   else = a ramp with that feature (meatballs, trap, stairs, pend, espresso, plain).
+   pace = how long the floor takes compared with an average one (measured). */
+const FLOOR_TYPES = [
+  { id: 'plinko',   name: 'OLIVE PLINKO',       pace: 1.0,  mods: ['pegs', 'meatballs', 'finish:plain'] },
+  { id: 'meatball', name: 'MEATBALL MOUNTAIN',  pace: 1.05, mods: ['meatballs', 'meatballs', 'meatballs', 'finish:meatballs'] },
+  { id: 'trap',     name: 'TRAPDOOR TRATTORIA', pace: 0.97, mods: ['trap', 'trap', 'trap', 'finish:plain'] },
+  { id: 'stairs',   name: 'SPAGHETTI STAIRS',   pace: 1.15, mods: ['stairs', 'stairs', 'stairs', 'finish:plain'] },
+  { id: 'pizza',    name: 'PIZZA PENDULUMS',    pace: 1.2,  mods: ['plain', 'pend', 'pend', 'finish:meatballs'] },
+  { id: 'espresso', name: 'ESPRESSO EXPRESS',   pace: 0.83, mods: ['espresso', 'espresso', 'meatballs', 'finish:espresso'] },
+  { id: 'mix',      name: 'MAMMA MIA MIX',      pace: 1.15, mods: ['meatballs', 'trap', 'pend', 'finish:plain'] },
+  { id: 'drop',     name: 'OLIVE DROP',         pace: 0.9,  mods: ['espresso', 'pegs', 'finish:meatballs'] },
+];
+const FINAL_TYPE = { id: 'final', name: 'GRAN FINALE', pace: 1.0, mods: ['pegs', 'pend', 'finish:meatballs'] };
+const FIRST_TYPE = 'plinko';
+
+// User-tweakable settings (bound to the sliders).
+const Settings = { gravity: 1900, bounce: 0.25, moves: 1 };
+
+/* Tuning knobs, chosen by simulating many rounds in the console (README →
+   "Tuning by simulation"). A race (gate opening → door slam) takes about
+   raceBase + raceEach × racers seconds; the schedule uses that to land the
+   final finish just before 0:00. */
+const TUNING = {
+  ballE: 0.55, pegE: 0.5, meatE: 0.35, pendE: 0.3,
+  friction: 0.0015, maxSpeed: 950,
+  meatR: 10, pegR: 7, pizzaR: 13, boost: 1100,
+  abilityGap: [1.0, 1.8],   // seconds between special moves (whole field)
+  backBias: 2.0,            // racers at the back use moves up to 3× as often
+  flipChance: 0.45,         // chance a heat gets a TRACK FLIP
+  raceBase: 4.8, raceEach: 0.28, endMargin: 3.2, doubleAt: 1.0, maxRace: 22,
+};
+
+const OUT_DUR = 1.5;      // elimination: door slams, loser squashed, banner
+const SHIFT_DUR = 0.85;   // the next floor slides in
+const MIN_INTRO = 0.75;   // marbles wait in the starting box at least this long
+
+/* =====================================================================
+   CANVAS, SIZING & LAYOUT
+   ===================================================================== */
+
+const stage = document.getElementById('stage');
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const LW = 540;   // logical width; everything is laid out in these units
+let LH = 960;     // logical height (grows on phones taller than 9:16)
+let scale = 1;    // device pixels per logical unit
+const L = {};     // layout
+
+// Laid out top-down inside a 960-tall block (centered on taller phone screens):
+// black band, hook + timer + racer strip, the track, black band.
+function layout() {
+  const block = (LH - 960) / 2;
+  const top = block + TOP_SPACE;
+  L.cx = LW / 2;
+  L.panelTop = top;
+  L.panelBottom = block + 960 - BOTTOM_SPACE;
+  L.hudY = top + 24;                  // timer (left), floor counter (right), "Comment below" (middle)
+  L.title2 = top + 66;                // hook: big lines
+  L.title3 = top + 110;
+  L.stripY = top + 152;               // the 12 racers: who's still in
+  L.trackTop = top + TRACK_OFFSET;    // track y = 0
+}
+
+const VIDEO_W = 1080;   // recorded video is 1080×1920 (TikTok's native size)
+
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  let cssW, cssH;
+  if (Recorder.on) {                  // recording: exact 9:16 frame, fitted to the window
+    cssH = Math.min(wh, ww * 16 / 9); cssW = cssH * 9 / 16; LH = 960;
+  } else if (wh / ww >= 16 / 9) {     // tall phone: fill the whole screen
+    cssW = ww; cssH = wh; LH = LW * wh / ww;
+  } else {                            // wider screen: 9:16 box, letterboxed in black
+    cssH = wh; cssW = wh * 9 / 16; LH = 960;
+  }
+  stage.style.width = cssW + 'px';
+  stage.style.height = cssH + 'px';
+  stage.style.setProperty('--u', (cssW / LW) + 'px');
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);   // cap for phone performance
+  scale = Recorder.on ? VIDEO_W / LW : (cssW / LW) * dpr;
+  canvas.width = Math.round(LW * scale);
+  canvas.height = Math.round(LH * scale);
+  layout();                           // the track uses its own coordinates, so nothing moves
+
+  sprites.clear();                    // everything cached is drawn at device resolution
+  buildBackdrop();
+  if (S.floor) renderFloor(S.floor);
+  if (S.prevFloor) renderFloor(S.prevFloor);
+}
+
+/* =====================================================================
+   HELPERS
+   ===================================================================== */
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[(Math.random() * arr.length) | 0];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+// Overshooting pop-in. Exactly 0 at the start: float rounding would otherwise give a
+// tiny negative number, and a negative arc/gradient radius throws and stops the loop.
+const easeOutBack = t => (t <= 0 ? 0 : 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2));
+const blur = px => px * scale;      // shadowBlur ignores the canvas transform
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+// Colors: mix two #rrggbb colors (t = 0 → a, 1 → b).
+function mix(a, b, t) {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = s => Math.round(lerp((pa >> s) & 255, (pb >> s) & 255, t));
+  return '#' + ((1 << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).slice(1);
+}
+const lighten = (c, t) => mix(c, '#FFFFFF', t);
+const darken = (c, t) => mix(c, '#000000', t);
+
+// Set a font that fits `text` into maxW, starting from maxSize.
+function fitFont(g, text, maxW, maxSize, weight = 700, family = CLAY) {
+  let size = maxSize;
+  g.font = `${weight} ${size}px ${family}`;
+  const w = g.measureText(text).width;
+  if (w > maxW) {
+    size = Math.max(5, size * maxW / w);
+    g.font = `${weight} ${size}px ${family}`;
+  }
+  return size;
+}
+
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+
+// Chunky clay lettering: outline, a darker "thickness" underneath, then the face.
+function clayText(g, text, x, y, fill, depth = 4, outline = 6) {
+  g.lineJoin = 'round';
+  g.lineWidth = outline;
+  g.strokeStyle = INK;
+  g.strokeText(text, x, y + depth);
+  g.fillStyle = typeof fill === 'string' ? darken(fill, 0.35) : '#7A4A2A';
+  for (let i = depth; i >= 1; i--) g.fillText(text, x, y + i);
+  g.strokeText(text, x, y);
+  g.fillStyle = fill;
+  g.fillText(text, x, y);
+}
+
+/* =====================================================================
+   SOUND (Web Audio, synthesized: tarantella mandolin, clay boings & plops)
+   ===================================================================== */
+
+// A harmonic minor (tarantella): A B C D E F G#
+const SCALE = [220, 246.94, 261.63, 293.66, 329.63, 349.23, 415.30, 440, 493.88, 523.25, 587.33, 659.25, 698.46, 830.61, 880];
+// 8-bar loop in 6/8: chord roots (A, E, Dm) for the oom-pa-pa backing
+const PROGRESSION = [
+  [110, [220, 261.63, 329.63]], [82.41, [207.65, 246.94, 329.63]],
+  [110, [220, 261.63, 329.63]], [82.41, [207.65, 246.94, 329.63]],
+  [110, [220, 261.63, 329.63]], [73.42, [220, 293.66, 349.23]],
+  [82.41, [207.65, 246.94, 329.63]], [110, [220, 261.63, 329.63]],
+];
+const EIGHTH = 60 / 150 / 3;   // dotted quarter = 150 bpm
+
+const Sound = {
+  ctx: null, out: null, comp: null, speaker: null, recDest: null, noise: null,
+  muted: false, last: {}, musicNext: 0, musicStep: 0,
+
+  // Called on page load (starts immediately where the browser allows autoplay)
+  // and again on every interaction, so audio starts the moment it's permitted.
+  // Graph: sounds → out → compressor → speaker (mute switch) → speakers
+  //                                  ↘ recDest (video recording, ignores mute)
+  unlock() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      this.ctx = new AC();
+      this.comp = this.ctx.createDynamicsCompressor();
+      this.out = this.ctx.createGain();
+      this.out.gain.value = 0.7;
+      this.speaker = this.ctx.createGain();
+      this.speaker.gain.value = this.muted ? 0 : 1;
+      this.out.connect(this.comp);
+      this.comp.connect(this.speaker);
+      this.speaker.connect(this.ctx.destination);
+      const len = this.ctx.sampleRate;
+      this.noise = this.ctx.createBuffer(1, len, len);
+      const d = this.noise.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    // 'suspended' = blocked by autoplay rules; 'interrupted' = iOS paused it (e.g. a call)
+    if (this.ctx.state !== 'running' && this.ctx.state !== 'closed') this.ctx.resume().catch(() => {});
+  },
+
+  // Audio stream for the video recorder (sound is recorded even when muted).
+  recordStream() {
+    if (!this.ctx || !this.ctx.createMediaStreamDestination) return null;
+    if (!this.recDest) {
+      this.recDest = this.ctx.createMediaStreamDestination();
+      this.comp.connect(this.recDest);
+    }
+    return this.recDest.stream;
+  },
+
+  get running() { return !!this.ctx && this.ctx.state === 'running'; },
+
+  setMuted(m) {
+    this.muted = m;
+    if (this.speaker) this.speaker.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.02);
+  },
+
+  get ready() { return this.running && (!this.muted || Recorder.on); },
+
+  // Rate limit: true if this sound played less than `gap` seconds ago.
+  busy(key, gap) {
+    const now = this.ctx.currentTime;
+    if (now - (this.last[key] || 0) < gap) return true;
+    this.last[key] = now;
+    return false;
+  },
+
+  note(freq, when, dur, type = 'sine', vol = 0.2, freqTo = 0) {
+    const c = this.ctx, t = c.currentTime + when;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t);
+    if (freqTo) o.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.out);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+
+  // Filtered noise. attack > 0 fades in, otherwise it hits instantly.
+  burst(dur, freq, q, vol, freqTo = 0, when = 0, attack = 0, type = 'bandpass') {
+    const c = this.ctx, t = c.currentTime + when;
+    const src = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    src.buffer = this.noise;
+    src.loop = dur > 0.9;
+    f.type = type;
+    f.frequency.setValueAtTime(freq, t);
+    if (freqTo) f.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    f.Q.value = q;
+    if (attack > 0) {
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + attack);
+    } else {
+      g.gain.setValueAtTime(vol, t);
+    }
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(this.out);
+    src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.05);
+  },
+
+  // Mandolin-ish pluck: bright sawtooth through a closing low-pass filter.
+  pluck(freq, when = 0, vol = 0.07, dur = 0.35, bright = 3200) {
+    const c = this.ctx, t = c.currentTime + when;
+    const o = c.createOscillator(), f = c.createBiquadFilter(), g = c.createGain();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(freq, t);
+    f.type = 'lowpass';
+    f.Q.value = 2;
+    f.frequency.setValueAtTime(bright, t);
+    f.frequency.exponentialRampToValueAtTime(Math.max(180, freq * 1.4), t + dur * 0.8);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(f); f.connect(g); g.connect(this.out);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+
+  // Cartoon spring: pitch swoops up and down with a wobble.
+  boing(when = 0, vol = 0.12, base = 170) {
+    const c = this.ctx, t = c.currentTime + when;
+    const o = c.createOscillator(), g = c.createGain(), lfo = c.createOscillator(), lg = c.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(base, t);
+    o.frequency.exponentialRampToValueAtTime(base * 3, t + 0.1);
+    o.frequency.exponentialRampToValueAtTime(base * 1.4, t + 0.45);
+    lfo.frequency.value = 17;
+    lg.gain.value = base * 0.25;
+    lfo.connect(lg); lg.connect(o.frequency);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+    o.connect(g); g.connect(this.out);
+    o.start(t); lfo.start(t); o.stop(t + 0.55); lfo.stop(t + 0.55);
+  },
+
+  // Background tarantella (oom-pa-pa on a mandolin), scheduled a little ahead.
+  music() {
+    if (!this.ready) { this.musicNext = 0; return; }
+    const now = this.ctx.currentTime;
+    if (this.musicNext < now) this.musicNext = now + 0.05;
+    while (this.musicNext < now + 0.15) {
+      const k = this.musicStep++, bar = PROGRESSION[Math.floor(k / 6) % PROGRESSION.length], e = k % 6;
+      const when = this.musicNext - now;
+      if (e === 0) this.pluck(bar[0], when, 0.07, 0.4, 900);
+      else if (e === 3) this.pluck(bar[0] * 1.5, when, 0.05, 0.35, 900);
+      else if (e === 2 || e === 5) bar[1].forEach((f, i) => this.pluck(f, when + i * 0.008, 0.018, 0.18, 2400));
+      this.musicNext += EIGHTH;
+    }
+  },
+
+  // Marble knocks on a ramp: a soft clay "thock".
+  thock(strength) {
+    if (!this.ready || this.busy('thock', 0.05)) return;
+    this.note(rand(150, 230), 0, 0.12, 'triangle', 0.05 + 0.1 * strength);
+    this.burst(0.05, 700, 2, 0.06 * strength, 0, 0, 0, 'lowpass');
+  },
+
+  // Two marbles bump: a little clay plop.
+  plop(strength) {
+    if (!this.ready || this.busy('plop', 0.06)) return;
+    this.note(rand(420, 560), 0, 0.09, 'sine', 0.05 + 0.08 * strength, 170);
+  },
+
+  // Olive peg: a mandolin note from the tarantella scale.
+  peg(i) {
+    if (!this.ready || this.busy('peg', 0.05)) return;
+    this.pluck(SCALE[7 + (i % 8)], 0, 0.05, 0.3, 4000);
+  },
+
+  squish() {
+    if (!this.ready || this.busy('squish', 0.08)) return;
+    this.burst(0.14, 500, 1.5, 0.12, 160, 0, 0, 'lowpass');
+    this.note(260, 0, 0.14, 'sine', 0.06, 110);
+  },
+
+  // Starting box: two wooden clacks, then a mandolin flourish on GO.
+  clack() {
+    if (!this.ready) return;
+    this.burst(0.05, 2400, 8, 0.35);
+    this.note(1700, 0, 0.05, 'triangle', 0.1);
+  },
+  go() {
+    if (!this.ready) return;
+    [440, 523.25, 659.25, 880].forEach((f, i) => {
+      for (let r = 0; r < 3; r++) this.pluck(f, i * 0.07 + r * 0.022, 0.05, 0.12, 4000);   // tremolo
+    });
+    this.burst(0.08, 1600, 3, 0.12);
+  },
+
+  // A marble makes it through the door: a bright ding (bigger for 1st).
+  finish(place) {
+    if (!this.ready) return;
+    const base = place === 1 ? 1318.5 : 1046.5;
+    this.note(base, 0, 0.5, 'sine', 0.12);
+    this.note(base * 2, 0, 0.3, 'sine', 0.04);
+    if (place === 1) [1568, 2093].forEach((f, i) => this.note(f, 0.08 + i * 0.07, 0.4, 'sine', 0.08));
+  },
+
+  // Elimination: door slam, then a sad trombone "wah wah wah waaah".
+  eliminated() {
+    if (!this.ready) return;
+    this.note(70, 0, 0.35, 'sine', 0.5, 35);
+    this.burst(0.3, 300, 0.8, 0.4, 0, 0, 0, 'lowpass');
+    const c = this.ctx;
+    [[392, 0.25], [370, 0.25], [349.2, 0.25], [329.6, 0.9]].reduce((t, [f, d]) => {
+      const at = c.currentTime + 0.25 + t;
+      const o = c.createOscillator(), fl = c.createBiquadFilter(), g = c.createGain();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f, at);
+      if (d > 0.5) {                                       // the last note wobbles
+        const lfo = c.createOscillator(), lg = c.createGain();
+        lfo.frequency.value = 6; lg.gain.value = 8;
+        lfo.connect(lg); lg.connect(o.frequency);
+        lfo.start(at); lfo.stop(at + d + 0.05);
+      }
+      fl.type = 'lowpass'; fl.frequency.value = 1100;
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(0.07, at + 0.03);
+      g.gain.setValueAtTime(0.07, at + d * 0.7);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + d);
+      o.connect(fl); fl.connect(g); g.connect(this.out);
+      o.start(at); o.stop(at + d + 0.05);
+      return t + d;
+    }, 0);
+  },
+
+  // The next floor slides in.
+  whoosh() {
+    if (!this.ready) return;
+    this.burst(0.6, 300, 1, 0.18, 2200, 0, 0.25);
+    [659.25, 587.33, 523.25, 493.88, 440].forEach((f, i) => this.pluck(f, 0.1 + i * 0.05, 0.035, 0.15, 3500));
+  },
+
+  flip() {
+    if (!this.ready) return;
+    this.boing(0, 0.16, 120);
+    for (let i = 0; i < 8; i++) this.burst(0.03, 1800, 6, 0.12, 0, i * 0.045);   // ratchet
+  },
+
+  bombWhistle() {
+    if (!this.ready) return;
+    this.note(1700, 0, 0.7, 'sine', 0.06, 450);
+  },
+  explode() {
+    if (!this.ready) return;
+    this.burst(0.8, 1200, 0.6, 0.5, 80);
+    this.note(65, 0, 0.7, 'sine', 0.6, 30);
+  },
+  slip() {
+    if (!this.ready) return;
+    this.note(300, 0, 0.2, 'sine', 0.1, 1400);
+  },
+
+  // Each special move has its own sound.
+  move(kind) {
+    if (!this.ready) return;
+    switch (kind) {
+      case 'sprint':                                       // sneaker squeaks
+        this.note(1800, 0, 0.07, 'sine', 0.07, 2600); this.note(2000, 0.09, 0.07, 'sine', 0.07, 2900);
+        this.burst(0.3, 900, 1, 0.12, 3000);
+        break;
+      case 'bonk':                                         // tung tung tung
+        for (let i = 0; i < 3; i++) { this.note(300, i * 0.12, 0.14, 'triangle', 0.16); this.burst(0.05, 1100, 3, 0.25, 0, i * 0.12); }
+        break;
+      case 'bomb': this.bombWhistle(); break;
+      case 'stomp':                                        // brr brr
+        for (let i = 0; i < 2; i++) this.note(62, i * 0.2, 0.17, 'square', 0.08, 50);
+        this.note(90, 0.4, 0.3, 'sine', 0.4, 40);
+        break;
+      case 'freeze':                                       // tick-tock + shimmer
+        this.note(1500, 0, 0.04, 'square', 0.04); this.note(1100, 0.16, 0.04, 'square', 0.04);
+        [2637, 3136, 3951].forEach((f, i) => this.note(f, 0.25 + i * 0.05, 0.5, 'sine', 0.04));
+        break;
+      case 'spin':                                         // music box
+        [1318.5, 1661.2, 1975.5, 2637].forEach((f, i) => this.note(f, i * 0.06, 0.35, 'sine', 0.06));
+        break;
+      case 'dash': this.burst(0.25, 3200, 2, 0.25, 700); break;
+      case 'banana': this.slip(); break;
+      case 'hop': this.boing(0, 0.12, 200); break;
+      case 'tire':                                         // tire screech
+        this.burst(0.45, 2300, 7, 0.14, 1700); this.note(880, 0, 0.35, 'sawtooth', 0.025, 700);
+        break;
+      case 'jet':                                          // goose honk + jet
+        this.note(330, 0, 0.14, 'sawtooth', 0.07, 300); this.note(330, 0.17, 0.14, 'sawtooth', 0.07, 300);
+        this.burst(0.7, 400, 1, 0.22, 3200);
+        break;
+      case 'gravity':                                      // cosmic wooo
+        this.note(160, 0, 0.8, 'sine', 0.12, 80); this.note(640, 0, 0.7, 'triangle', 0.04, 1280);
+        break;
+    }
+  },
+
+  tick() {
+    if (!this.ready) return;
+    this.note(1250, 0, 0.06, 'triangle', 0.15);
+    this.burst(0.04, 2400, 6, 0.2);
+  },
+
+  // Winner: tarantella run up the scale + a big accordion-ish chord.
+  win() {
+    if (!this.ready) return;
+    SCALE.slice(4).forEach((f, i) => this.pluck(f, i * 0.045, 0.06, 0.2, 4500));
+    [220, 277.18, 329.63, 440, 554.37, 659.25].forEach(f => {
+      this.note(f, 0.5, 2.2, 'sawtooth', 0.025);
+      this.note(f * 1.004, 0.5, 2.2, 'square', 0.015);
+    });
+    this.burst(1.2, 6000, 0.7, 0.12, 2500, 0.5);
+  },
+
+  timeUp() {
+    if (!this.ready) return;
+    [440, 554.37, 659.25, 880].forEach((f, i) => this.note(f, i * 0.02, 2.4, 'triangle', 0.08));
+    this.note(110, 0, 1.2, 'sine', 0.5, 55);
+  },
+};
+
+/* =====================================================================
+   SIMULATION STATE
+   ===================================================================== */
+
+const S = {
+  racers: [], floor: null, prevFloor: null,
+  phase: 'intro', phaseT: 0, phaseDur: 1, raceT: 0,
+  heat: 0, elim: 1, plan: null, finished: [], losers: [], winner: null,
+  fx: [], hazards: [], bombs: [],
+  banner: null, flash: 0, shake: 0,
+  abilityT: 0, flipAt: -1, recentTypes: [], clacks: 0,
+  clock: ROUND_SECONDS, lastTick: 0, timeUp: false,
+  time: 0, acc: 0,
+};
+
+function makeRacer(def, idx) {
+  return { def, idx, x: 0, y: 0, vx: 0, vy: 0, r: R, state: 'pen', place: 0,
+           squash: 0, squashAng: 0, lean: 0, cool: 0, frozenT: 0, ghostT: 0, heavyT: 0,
+           slowT: 0, stuckT: 0, boostT: 0, outT: 0, trail: [] };
+}
+
+const aliveRacers = () => S.racers.filter(b => b.state !== 'out');
+const racing = () => S.racers.filter(b => b.state === 'race');
+
+// Fresh round: all 12 racers, first floor, clock back to 2:00.
+function startRound() {
+  S.racers = RACERS.map(makeRacer);
+  S.fx.length = 0; S.hazards.length = 0; S.bombs.length = 0;
+  S.heat = 0; S.winner = null; S.banner = null; S.flash = 0; S.shake = 0;
+  S.losers = []; S.recentTypes = [FIRST_TYPE];
+  S.clock = Number(params.get('seconds')) || ROUND_SECONDS;   // ?seconds=10 for quick tests
+  S.lastTick = 0;
+  S.timeUp = false;
+  S.acc = 0;
+  S.prevFloor = null;
+  const first = FLOOR_TYPES.find(t => t.id === FIRST_TYPE);
+  S.plan = planHeat(S.racers.length, S.clock, first.pace);
+  S.plan.intro = Math.max(S.plan.intro, 1.4);         // time to read the hook
+  S.floor = buildFloor(first);
+  placeInPen();
+  beginHeat();
+}
+
+/* Schedule: how many heats are left and how long each can take, so the last
+   race finishes just before 0:00. Spare time lengthens the wait in the
+   starting box; if the clock is running short, the last TWO go out this heat. */
+function planHeat(n, timeLeft, pace = 1) {
+  const est = k => TUNING.raceBase + TUNING.raceEach * k;
+  let need = MIN_INTRO + est(n) * pace + OUT_DUR;              // this heat
+  for (let k = n - 1; k >= 2; k--) need += SHIFT_DUR + MIN_INTRO + est(k) + OUT_DUR;
+  let slack = timeLeft - TUNING.endMargin - need;
+  let elim = 1;
+  while (slack < -TUNING.doubleAt && elim < 3 && n - elim >= 3) {
+    elim++;
+    slack += SHIFT_DUR + MIN_INTRO + est(n - elim + 1) + OUT_DUR;   // one heat fewer
+  }
+  const intro = clamp(MIN_INTRO + Math.max(0, slack) / (n - elim), MIN_INTRO, 2.6);
+  return { elim, intro, slack };
+}
+
+// Next floor: never one of the last few, a quick one when the clock is short.
+function pickFloorType(n, slack) {
+  if (n <= 2) return FINAL_TYPE;
+  let pool = FLOOR_TYPES.filter(t => !S.recentTypes.includes(t.id));
+  if (slack < -1) pool = pool.filter(t => t.pace <= 0.97);
+  else if (slack > 8) pool = pool.filter(t => t.pace >= 1);
+  const t = pick(pool.length ? pool : FLOOR_TYPES.filter(t => !S.recentTypes.includes(t.id)));
+  S.recentTypes.push(t.id);
+  if (S.recentTypes.length > 4) S.recentTypes.shift();
+  return t;
+}
+
+// Survivors line up in the starting box of the current floor, in random order.
+function placeInPen() {
+  const alive = shuffle(aliveRacers()), n = alive.length;
+  alive.forEach((b, i) => {
+    const row = Math.floor(i / 6), inRow = Math.min(6, n - row * 6), col = i % 6;
+    b.x = TCX + (col - (inRow - 1) / 2) * (2 * R + 1);
+    b.y = PEN_H - 6 - T / 2 - R - row * (2 * R + 1);
+    b.vx = 0; b.vy = 0;
+    b.state = 'pen'; b.place = 0;
+    b.frozenT = 0; b.ghostT = 0; b.heavyT = 0; b.slowT = 0; b.stuckT = 0; b.boostT = 0;
+    b.cool = rand(0.5, 3); b.squash = 0; b.trail.length = 0;
+  });
+}
+
+// A new heat: the survivors wait in the starting box, then the gate opens.
+function beginHeat() {
+  S.heat++;
+  const n = aliveRacers().length;
+  const F = S.floor;
+  S.elim = S.plan.elim;
+  S.phase = 'intro';
+  S.phaseT = 0;
+  S.phaseDur = S.plan.intro;
+  S.raceT = 0;
+  S.clacks = 0;
+  S.finished = [];
+  S.hazards.length = 0;
+  S.bombs.length = 0;
+  F.pen.open = 0;
+  F.door.close = 0;
+  S.abilityT = rand(1.2, 2.0);
+  const flippable = F.ramps.some(rp => rp.flippable);
+  S.flipAt = flippable && n > 2 && Math.random() < TUNING.flipChance ? rand(2.0, 3.8) : -1;
+  const final = n === 2;
+  S.banner = {
+    text: final ? 'FINAL RACE!' : `FLOOR ${S.heat}`,
+    sub: final ? 'First one through the door WINS!' : S.elim > 1 ? `${F.name} · LAST ${S.elim} ARE OUT!` : F.name,
+    life: 1.7, max: 1.7, kind: final ? 'win' : 'floor',
+  };
+}
+
+function startRace() {
+  S.phase = 'race';
+  S.phaseT = 0;
+  S.raceT = 0;
+  for (const b of aliveRacers()) b.state = 'race';
+  Sound.go();
+}
+
+/* =====================================================================
+   FLOORS: built from modules, in track units
+   ===================================================================== */
+
+// A collider segment. Velocities are set for moving parts (trapdoors, flips, the gate).
+function mkSeg(x1, y1, x2, y2) { return { x1, y1, x2, y2, vx1: 0, vy1: 0, vx2: 0, vy2: 0 }; }
+function moveSeg(s, x1, y1, x2, y2, dt) {
+  if (dt > 0) {
+    s.vx1 = (x1 - s.x1) / dt; s.vy1 = (y1 - s.y1) / dt;
+    s.vx2 = (x2 - s.x2) / dt; s.vy2 = (y2 - s.y2) / dt;
+  }
+  s.x1 = x1; s.y1 = y1; s.x2 = x2; s.y2 = y2;
+}
+function stopSeg(s) { s.vx1 = s.vy1 = s.vx2 = s.vy2 = 0; }
+
+/* A ramp is a line with a pose (center, half-length, angle). Features sit at
+   positions s along it, measured from the center (left end = -half). */
+function makeRamp(xa, ya, xb, yb) {
+  const [x1, y1, x2, y2] = xa < xb ? [xa, ya, xb, yb] : [xb, yb, xa, ya];
+  return { cx: (x1 + x2) / 2, cy: (y1 + y2) / 2, half: Math.hypot(x2 - x1, y2 - y1) / 2,
+           ang: Math.atan2(y2 - y1, x2 - x1), segs: [], meats: [], flip: null };
+}
+function rampPt(rp, s, n = 0) {   // n > 0 = above the line
+  const c = Math.cos(rp.ang), sn = Math.sin(rp.ang);
+  return [rp.cx + c * s + sn * n, rp.cy + sn * s - c * n];
+}
+// s measured from the HIGH end, as a fraction of the length (0 = high end, 1 = low end).
+function sFromHigh(rp, u) {
+  const highLeft = Math.sin(rp.ang) > 0;
+  return highLeft ? -rp.half + u * 2 * rp.half : rp.half - u * 2 * rp.half;
+}
+// Height of the ramp line at x (clamped to its ends).
+function rampYAt(rp, x) {
+  const [x1, y1] = rampPt(rp, -rp.half), [x2, y2] = rampPt(rp, rp.half);
+  const t = clamp((x - x1) / (x2 - x1), 0, 1);
+  return y1 + (y2 - y1) * t;
+}
+
+// Recompute a ramp's colliders from its pose (moving only during a TRACK FLIP).
+function updateRamp(rp, dt) {
+  if (rp.stairs) return;
+  for (const part of rp.parts) {
+    const [x1, y1] = rampPt(rp, part[0]), [x2, y2] = rampPt(rp, part[1]);
+    moveSeg(part.seg, x1, y1, x2, y2, dt);
+  }
+  for (const m of rp.meats) {
+    const [x, y] = rampPt(rp, m.s, -3);
+    if (dt > 0) { m.vx = (x - m.x) / dt; m.vy = (y - m.y) / dt; }
+    m.x = x; m.y = y;
+  }
+}
+
+function buildFloor(type) {
+  const F = { type, name: type.name, mods: [], ramps: [], segs: [], pegs: [], traps: [], pends: [],
+              canvas: null, flipping: null, pen: null, door: null, colors: (Math.random() * RAMP_COLORS.length) | 0 };
+  const specs = type.mods.map(m => {
+    const [kind, feat] = m.startsWith('finish') ? ['finish', m.split(':')[1]] : m === 'pegs' ? ['pegs', 'plain'] : ['ramp', m];
+    return { kind, feat };
+  });
+  const pegCount = specs.filter(m => m.kind === 'pegs').length;
+  const rampH = (TH - PEN_H - pegCount * PEGS_H) / (specs.length - pegCount);
+
+  // Directions bottom-up: the finish ramp always runs left (door on the left wall),
+  // and each ramp above runs the other way so it drops onto the next one's high end.
+  let dir = -1;
+  for (let k = specs.length - 1; k >= 0; k--) { specs[k].dir = dir; dir = -dir; }
+
+  let y = PEN_H;
+  specs.forEach((m, k) => {
+    m.y0 = y;
+    m.h = m.kind === 'pegs' ? PEGS_H : rampH;
+    m.index = k;
+    m.color = RAMP_COLORS[(F.colors + k) % RAMP_COLORS.length];
+    buildModule(F, m, k > 0 ? F.mods[k - 1] : null);
+    F.mods.push(m);
+    y += m.h;
+  });
+
+  // Walls (with the finish door in the left one), ceiling, starting box
+  const fin = F.mods[F.mods.length - 1].ramp;
+  const doorBot = rampYAt(fin, AX0) + 2, doorTop = doorBot - 2 * R - 22;
+  F.door = { top: doorTop, bot: doorBot, close: 0, seg: mkSeg(AX0, doorTop, AX0, doorBot) };
+  F.segs.push(mkSeg(AX0, -40, AX0, doorTop), mkSeg(AX0, doorBot, AX0, TH + 40));
+  F.segs.push(mkSeg(AX1, -40, AX1, TH + 40));
+  F.segs.push(mkSeg(AX0, -T / 2 - 1, AX1, -T / 2 - 1));
+  const px0 = TCX - 3 * (2 * R + 1) - 2, px1 = TCX + 3 * (2 * R + 1) + 2, fy = PEN_H - 6;
+  F.pen = { x0: px0, x1: px1, y: fy, open: 0,
+            left: mkSeg(px0 - T / 2, fy, TCX, fy), right: mkSeg(TCX, fy, px1 + T / 2, fy) };
+  F.segs.push(mkSeg(px0 - T / 2, 4, px0 - T / 2, fy), mkSeg(px1 + T / 2, 4, px1 + T / 2, fy));
+
+  renderFloor(F);
+  return F;
+}
+
+function buildModule(F, m, prev) {
+  const fin = m.kind === 'finish';
+  const top = m.kind === 'pegs' ? m.y0 + PEG_FIELD : m.y0;
+  const yHi = top + 24, yLo = m.y0 + m.h - 30;
+  const xHi = m.dir > 0 ? AX0 : AX1;
+  const xLo = fin ? (m.dir > 0 ? AX1 + 22 : AX0 - 22) : (m.dir > 0 ? AX1 - GAP : AX0 + GAP);
+  let feat = m.feat;
+  if (feat === 'pend' && !prev) feat = 'meatballs';     // nothing above the first ramp to hang from
+
+  const rp = makeRamp(xHi, yHi, xLo, yLo);
+  rp.color = m.color;
+  rp.feat = feat;
+  rp.finish = fin;
+  rp.mod = m;
+  rp.parts = [];
+  rp.flippable = !fin && ['plain', 'meatballs', 'espresso'].includes(feat);
+  m.ramp = rp;
+  F.ramps.push(rp);
+
+  if (feat === 'stairs') {
+    // Five steps: a sloped tread, then a little drop.
+    const N = 5, run = (xLo - xHi) / N, drop = (yLo - yHi) / N;
+    const pts = [[xHi, yHi]];
+    let x = xHi, yy = yHi;
+    for (let i = 0; i < N; i++) {
+      pts.push([x + run, yy + drop * 0.55]);
+      if (i < N - 1) pts.push([x + run, yy + drop]);
+      x += run; yy += drop;
+    }
+    rp.stairs = pts;
+    for (let i = 0; i < pts.length - 1; i++) F.segs.push(mkSeg(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]));
+  } else if (feat === 'trap') {
+    // A hinged trapdoor in the middle: it drops whoever is on it to the ramp below.
+    const len = 64;
+    const a = sFromHigh(rp, 0.42), b = a + (Math.sin(rp.ang) > 0 ? len : -len);
+    const [s0, s1] = a < b ? [a, b] : [b, a];
+    rp.parts.push(Object.assign([-rp.half, s0], { seg: mkSeg(0, 0, 0, 0) }));
+    rp.parts.push(Object.assign([s1, rp.half], { seg: mkSeg(0, 0, 0, 0) }));
+    const [hx, hy] = rampPt(rp, a);
+    const closed = Math.atan2(Math.sin(rp.ang) * Math.sign(b - a), Math.cos(rp.ang) * Math.sign(b - a));
+    F.traps.push({ hx, hy, len, closed, open: closed + m.dir * 70 * DEG, ang: closed,
+                   phase: rand(0, 2.2), seg: mkSeg(0, 0, 0, 0), color: m.color });
+  } else {
+    rp.parts.push(Object.assign([-rp.half, rp.half], { seg: mkSeg(0, 0, 0, 0) }));
+  }
+
+  if (feat === 'meatballs') {
+    for (const u of [0.3, 0.55, 0.8]) rp.meats.push({ s: sFromHigh(rp, u), x: 0, y: 0, vx: 0, vy: 0, r: TUNING.meatR });   // half sunk into the ramp
+  }
+  if (feat === 'espresso') {
+    const a = sFromHigh(rp, 0.12), b = sFromHigh(rp, 0.62);
+    rp.boost = [Math.min(a, b), Math.max(a, b)];
+  }
+  if (feat === 'pend' && prev) {
+    // Swinging pizzas hang from the underside of the ramp above. The bottom of the
+    // swing is in the marbles' way; at the ends it rises high enough to roll under.
+    for (const u of [0.45, 0.78]) {
+      const [x, ly] = rampPt(rp, sFromHigh(rp, u));
+      const py = rampYAt(prev.ramp, x) + T / 2 + 2;
+      const len = (ly - T / 2 - R - 15) - py;
+      if (len < 56) continue;
+      const p = { px: x, py, len, amp: 60 * DEG, w: TAU / (1.2 + len / 90),
+                  phase: rand(0, TAU), x: 0, y: 0, vx: 0, vy: 0, r: TUNING.pizzaR, ang: 0 };
+      p.ang = p.amp * Math.sin(p.phase);
+      p.x = p.px + Math.sin(p.ang) * len;
+      p.y = py + Math.cos(p.ang) * len;
+      F.pends.push(p);
+    }
+  }
+  updateRamp(rp, 0);
+
+  if (m.kind === 'pegs') {
+    // Olive Plinko: offset rows, wide enough apart that a marble always fits through.
+    for (let row = 0; row < 3; row++) {
+      const y = m.y0 + 22 + row * 36 + (prev ? 0 : 6);
+      const off = row % 2 ? 32 : 0;
+      for (let x = TCX - 4 * 64 + off; x <= AX1; x += 64) {
+        if (x - AX0 < 46 || AX1 - x < 46) continue;
+        F.pegs.push({ x, y, r: TUNING.pegR, vx: 0, vy: 0, i: F.pegs.length });
+      }
+    }
+    // Marbles dropping in along a wall get nudged into the field.
+    if (prev) {
+      const side = prev.dir > 0 ? 1 : -1, wx = side > 0 ? AX1 : AX0;
+      F.segs.push(mkSeg(wx, m.y0 + 4, wx - side * 44, m.y0 + 28));
+      F.deflector = { x1: wx, y1: m.y0 + 4, x2: wx - side * 44, y2: m.y0 + 28 };
+    }
+  }
+}
+
+/* =====================================================================
+   PHYSICS
+   ===================================================================== */
+
+const STEP = 1 / 240;   // fixed physics step (4 substeps per 60fps frame)
+
+// Circle vs. a capsule segment (ramps and walls are T thick), with the segment's
+// own motion so trapdoors, flips and the gate push marbles realistically.
+function collideSeg(b, s, e) {
+  const dx = s.x2 - s.x1, dy = s.y2 - s.y1;
+  const l2 = dx * dx + dy * dy || 1e-9;
+  const t = clamp(((b.x - s.x1) * dx + (b.y - s.y1) * dy) / l2, 0, 1);
+  let nx = b.x - (s.x1 + dx * t), ny = b.y - (s.y1 + dy * t);
+  const rr = b.r + T / 2, d2 = nx * nx + ny * ny;
+  if (d2 >= rr * rr) return 0;
+  const d = Math.sqrt(d2);
+  if (d < 1e-6) { nx = 0; ny = -1; } else { nx /= d; ny /= d; }
+  b.x += nx * (rr - d);
+  b.y += ny * (rr - d);
+  const svx = s.vx1 + (s.vx2 - s.vx1) * t, svy = s.vy1 + (s.vy2 - s.vy1) * t;
+  const rvx = b.vx - svx, rvy = b.vy - svy;
+  const vn = rvx * nx + rvy * ny;
+  if (vn >= 0) return 0;
+  b.vx -= (1 + e) * vn * nx;
+  b.vy -= (1 + e) * vn * ny;
+  const tx = -ny, ty = nx, vt = rvx * tx + rvy * ty;   // a touch of rolling friction
+  b.vx -= vt * TUNING.friction * tx;
+  b.vy -= vt * TUNING.friction * ty;
+  squashOn(b, -vn, nx, ny);
+  return -vn;
+}
+
+// Circle vs. a fixed or moving circle (olives, meatballs, swinging pizzas).
+function collideCircle(b, c, e) {
+  const dx = b.x - c.x, dy = b.y - c.y, rr = b.r + c.r, d2 = dx * dx + dy * dy;
+  if (d2 >= rr * rr) return 0;
+  const d = Math.sqrt(d2) || 1e-6, nx = dx / d, ny = dy / d;
+  b.x = c.x + nx * rr;
+  b.y = c.y + ny * rr;
+  const rvx = b.vx - c.vx, rvy = b.vy - c.vy, vn = rvx * nx + rvy * ny;
+  if (vn >= 0) return 0;
+  b.vx -= (1 + e) * vn * nx;
+  b.vy -= (1 + e) * vn * ny;
+  squashOn(b, -vn, nx, ny);
+  return -vn;
+}
+
+// Marble vs. marble (mass-weighted; frozen marbles don't budge).
+function resolve(a, b, e) {
+  const dx = b.x - a.x, dy = b.y - a.y, rs = a.r + b.r, d2 = dx * dx + dy * dy;
+  if (d2 >= rs * rs) return 0;
+  const ma = a.frozenT > 0 ? 1e6 : a.heavyT > 0 ? 4 : 1;
+  const mb = b.frozenT > 0 ? 1e6 : b.heavyT > 0 ? 4 : 1;
+  const d = Math.sqrt(d2) || 0.001, nx = dx / d, ny = dy / d, overlap = rs - d;
+  const inv = 1 / (ma + mb);
+  a.x -= nx * overlap * mb * inv; a.y -= ny * overlap * mb * inv;
+  b.x += nx * overlap * ma * inv; b.y += ny * overlap * ma * inv;
+  const rv = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+  if (rv >= 0) return 0;
+  const j = -(1 + e) * rv / (1 / ma + 1 / mb);
+  a.vx -= j / ma * nx; a.vy -= j / ma * ny;
+  b.vx += j / mb * nx; b.vy += j / mb * ny;
+  squashOn(a, -rv * 0.6, -nx, -ny);
+  squashOn(b, -rv * 0.6, nx, ny);
+  return -rv;
+}
+
+// Claymation squash & stretch on hard hits.
+function squashOn(b, speed, nx, ny) {
+  const k = Math.min(1, speed / 700);
+  if (k > b.squash) { b.squash = k; b.squashAng = Math.atan2(ny, nx); }
+}
+
+// Moving parts for this instant of the heat.
+function updateGeometry(F, dt) {
+  const P = F.pen;
+  P.open = clamp(S.raceT / 0.25, 0, 1);                       // the gate slides open
+  moveSeg(P.left, P.x0 - T / 2, P.y, lerp(TCX, P.x0 - T / 2, P.open), P.y, dt);
+  moveSeg(P.right, lerp(TCX, P.x1 + T / 2, P.open), P.y, P.x1 + T / 2, P.y, dt);
+
+  for (const tr of F.traps) {                                  // trapdoors: shut 1.5s, open 0.7s
+    const c = (S.raceT + tr.phase) % 2.2;
+    const k = c < 1.5 ? 0 : c < 1.62 ? (c - 1.5) / 0.12 : c < 2.0 ? 1 : 1 - (c - 2.0) / 0.2;
+    tr.ang = lerp(tr.closed, tr.open, easeInOut(clamp(k, 0, 1)));
+    moveSeg(tr.seg, tr.hx, tr.hy, tr.hx + Math.cos(tr.ang) * tr.len, tr.hy + Math.sin(tr.ang) * tr.len, dt);
+  }
+
+  for (const p of F.pends) {                                   // swinging pizzas
+    const th = p.amp * Math.sin(p.w * S.raceT + p.phase);
+    const om = p.amp * p.w * Math.cos(p.w * S.raceT + p.phase);
+    p.ang = th;
+    p.x = p.px + Math.sin(th) * p.len;
+    p.y = p.py + Math.cos(th) * p.len;
+    p.vx = Math.cos(th) * p.len * om;
+    p.vy = -Math.sin(th) * p.len * om;
+  }
+
+  const rp = F.flipping;                                       // TRACK FLIP in progress
+  if (rp) {
+    const f = rp.flip;
+    f.t += dt;
+    const p = easeInOut(clamp(f.t / f.dur, 0, 1));
+    rp.cx = lerp(f.c0, f.c1, p);
+    rp.ang = lerp(f.a0, f.a1, p);
+    updateRamp(rp, dt);
+    if (f.t >= f.dur) {
+      rp.flip = null;
+      F.flipping = null;
+      for (const part of rp.parts) stopSeg(part.seg);
+      for (const m of rp.meats) { m.vx = 0; m.vy = 0; }
+      renderFloor(F);
+    }
+  }
+}
+
+function step(dt) {
+  const F = S.floor;
+  S.raceT += dt;
+  updateGeometry(F, dt);
+  const G = Settings.gravity, e = Settings.bounce;
+  const list = racing();
+
+  for (const b of list) {
+    b.cool -= dt; b.ghostT -= dt; b.heavyT -= dt; b.boostT -= dt;
+    if (b.frozenT > 0) { b.frozenT -= dt; b.vx = 0; b.vy = 0; continue; }   // time stopped
+    b.vy += G * dt;
+    if (b.slowT > 0) { b.slowT -= dt; b.vx *= 1 - 3 * dt; b.vy *= 1 - 1.5 * dt; }
+    b.vx *= 0.9994; b.vy *= 0.9994;
+    const sp = Math.hypot(b.vx, b.vy);
+    if (sp > TUNING.maxSpeed) { b.vx *= TUNING.maxSpeed / sp; b.vy *= TUNING.maxSpeed / sp; }
+    b.x += b.vx * dt; b.y += b.vy * dt;
+  }
+
+  // Marble vs. marble
+  const n = list.length, eb = TUNING.ballE;
+  for (let i = 0; i < n; i++) {
+    const a = list[i];
+    if (a.ghostT > 0) continue;
+    for (let j = i + 1; j < n; j++) {
+      const b = list[j];
+      if (b.ghostT > 0) continue;
+      const hit = resolve(a, b, eb);
+      if (hit > 120) Sound.plop(Math.min(1, hit / 600));
+    }
+  }
+
+  // Olives, meatballs, pizzas
+  for (const b of list) {
+    for (const p of F.pegs) { const v = collideCircle(b, p, TUNING.pegE); if (v > 60) Sound.peg(p.i); }
+    for (const rp of F.ramps) for (const m of rp.meats) { const v = collideCircle(b, m, TUNING.meatE); if (v > 120) Sound.squish(); }
+    for (const p of F.pends) { const v = collideCircle(b, p, TUNING.pendE); if (v > 100) Sound.squish(); }
+  }
+
+  // Walls and ramps last so nothing ends a step inside them
+  for (const b of list) {
+    let hit = 0;
+    for (const s of F.segs) hit = Math.max(hit, collideSeg(b, s, e));
+    for (const rp of F.ramps) for (const part of rp.parts) hit = Math.max(hit, collideSeg(b, part.seg, e));
+    for (const tr of F.traps) hit = Math.max(hit, collideSeg(b, tr.seg, e));
+    if (S.raceT < 0.6 || F.pen.open < 1) { collideSeg(b, F.pen.left, 0.1); collideSeg(b, F.pen.right, 0.1); }
+    if (F.door.close > 0) collideSeg(b, F.door.seg, 0.2);
+    if (hit > 160) Sound.thock(Math.min(1, hit / 800));
+  }
+
+  // Espresso pads: a shove downhill while rolling over them
+  for (const rp of F.ramps) {
+    if (!rp.boost) continue;
+    const c = Math.cos(rp.ang), sn = Math.sin(rp.ang), down = sn > 0 ? 1 : -1;
+    for (const b of list) {
+      const dx = b.x - rp.cx, dy = b.y - rp.cy;
+      const s = dx * c + dy * sn, nUp = dx * sn - dy * c;
+      if (s < rp.boost[0] || s > rp.boost[1] || nUp < 0 || nUp > R + T / 2 + 4) continue;
+      b.vx += c * down * TUNING.boost * dt;
+      b.vy += sn * down * TUNING.boost * dt;
+      b.boostT = 0.25;
+    }
+  }
+
+  // Banana peels
+  for (const h of S.hazards) {
+    for (const b of list) {
+      if (h.used || (b === h.owner && h.age < 1.5)) continue;
+      if ((b.x - h.x) ** 2 + (b.y - h.y) ** 2 < (b.r + h.r) ** 2) {
+        h.used = true;
+        b.vx = -b.vx * 0.7; b.vy -= 180;
+        addFloat(b.x, b.y - 30, 'SLIP!', '#F5CF3A', 20, 0.9);
+        Sound.slip();
+      }
+    }
+    h.age += dt;
+  }
+  S.hazards = S.hazards.filter(h => !h.used && h.age < 6);
+
+  // Bombardiro's bombs fall and blow up on whatever they hit
+  for (const bm of S.bombs) {
+    bm.vy += G * 0.6 * dt;
+    bm.x += bm.vx * dt; bm.y += bm.vy * dt;
+    bm.fuse -= dt;
+    const touching = list.some(b => (b.x - bm.x) ** 2 + (b.y - bm.y) ** 2 < (b.r + 8) ** 2);
+    if (bm.fuse <= 0 || touching) { bm.gone = true; explode(bm.x, bm.y); }
+  }
+  S.bombs = S.bombs.filter(bm => !bm.gone);
+
+  // Through the door = finished; marbles that sit still too long get a nudge
+  for (const b of list) {
+    if (b.x < AX0 - 14) { finishRacer(b); continue; }
+    if (!Number.isFinite(b.x) || !Number.isFinite(b.y) || b.y > TH + 60 || b.x > AX1 + 40 || b.y < -80) {
+      b.x = TCX + rand(-40, 40); b.y = 20; b.vx = 0; b.vy = 0;  // lost marble: back to the top
+      continue;
+    }
+    const slow = Math.hypot(b.vx, b.vy) < 28 && b.frozenT <= 0;
+    b.stuckT = slow && b.y > PEN_H ? b.stuckT + dt : 0;
+    if (b.stuckT > 0.6) {                         // roll it out along its ramp (breaks up jams)
+      b.stuckT = rand(-0.3, 0);
+      b.vx += downhillX(b) * rand(220, 320);
+      b.vy -= rand(40, 120);
+    }
+  }
+
+  // Special moves, every second or two
+  S.abilityT -= dt * Settings.moves;
+  if (S.abilityT <= 0 && S.raceT > 0.8) {
+    S.abilityT = rand(TUNING.abilityGap[0], TUNING.abilityGap[1]);
+    triggerAbility();
+  }
+  if (S.flipAt > 0 && S.raceT >= S.flipAt) { S.flipAt = -1; startFlip(); }
+
+  // Enough marbles are through: the door slams on the rest
+  if (S.phase === 'race') {
+    const need = aliveRacers().length - S.elim;
+    if (S.finished.length >= need) startOut();
+    else if (S.raceT > TUNING.maxRace) startOut();          // safety net: the slowest go out
+  }
+}
+
+/* =====================================================================
+   PROGRESS, MOVES & EVENTS
+   ===================================================================== */
+
+// Which module a marble is in: the first ramp still below it.
+function moduleIndex(b) {
+  const F = S.floor;
+  for (let k = 0; k < F.mods.length; k++) {
+    if (b.y < rampYAt(F.mods[k].ramp, b.x) + 4) return k;
+  }
+  return F.mods.length - 1;
+}
+
+// How far along the race a marble is (bigger = further).
+function progressOf(b) {
+  if (b.state === 'done') return 1000 - b.place;
+  const F = S.floor, k = moduleIndex(b), rp = F.mods[k].ramp;
+  const [x1] = rampPt(rp, -rp.half), [x2] = rampPt(rp, rp.half);
+  const f = clamp((b.x - x1) / (x2 - x1), 0, 1);
+  return k + (Math.sin(rp.ang) > 0 ? f : 1 - f);
+}
+
+// Direction a marble should roll on the ramp under it (+1 right, -1 left).
+function downhillX(b) {
+  const rp = S.floor.mods[moduleIndex(b)].ramp;
+  return Math.sin(rp.ang) > 0 ? 1 : -1;
+}
+
+function standings() {
+  return racing().sort((a, b) => progressOf(b) - progressOf(a));
+}
+
+function finishRacer(b) {
+  b.state = 'done';
+  S.finished.push(b);
+  b.place = S.finished.length;
+  const y = clamp(b.y, 30, TH - 30);
+  addPoof(AX0 + 6, y, b.def.color);
+  const lastSpot = b.place === aliveRacers().length - S.elim;
+  if (b.place === 1) addFloat(AX0 + 70, y - 34, '1ST!', '#FFD23F', 24, 1.0);
+  else if (lastSpot) addFloat(AX0 + 80, y - 34, 'LAST SPOT!', '#7CE38B', 20, 1.0);
+  Sound.finish(b.place);
+}
+
+// A random racer (more often one near the back) uses their special move.
+function triggerAbility() {
+  if (Settings.moves <= 0) return;
+  const order = standings().filter(b => b.y > PEN_H && b.frozenT <= 0 && b.cool <= 0);
+  if (!order.length) return;
+  const w = order.map((b, i) => 1 + TUNING.backBias * (order.length > 1 ? i / (order.length - 1) : 0));
+  let r = rand(0, w.reduce((a, b) => a + b, 0));
+  let b = order[order.length - 1];
+  for (let i = 0; i < order.length; i++) { r -= w[i]; if (r <= 0) { b = order[i]; break; } }
+  useAbility(b);
+}
+
+// Every boost pushes downhill along the ramp the marble is on (or about to land on).
+function boost(b, amt) {
+  const rp = S.floor.mods[moduleIndex(b)].ramp;
+  const down = Math.sin(rp.ang) > 0 ? 1 : -1;
+  b.vx += Math.cos(rp.ang) * down * amt;
+  b.vy += Math.sin(rp.ang) * down * amt;
+  b.boostT = 0.6;
+}
+// Push every rival within `rad` away from b.
+function shove(b, rad, amt, up = 0) {
+  for (const o of racing()) {
+    if (o === b) continue;
+    const dx = o.x - b.x, dy = o.y - b.y, d = Math.hypot(dx, dy) || 1;
+    if (d > rad) continue;
+    const k = amt * (1 - 0.5 * d / rad);
+    o.vx += dx / d * k; o.vy += dy / d * k - up;
+  }
+}
+const rivalsNear = (b, rad) => racing().filter(o => o !== b && (o.x - b.x) ** 2 + (o.y - b.y) ** 2 < rad * rad);
+
+function useAbility(b) {
+  const d = b.def;
+  b.cool = rand(4, 7);
+  addFloat(b.x, b.y - 32, d.move, lighten(d.color, 0.25), 18, 1.3);
+  addRing(b.x, b.y, R, R * 3, d.color, 0.45, 5);
+  Sound.move(d.ability);
+  switch (d.ability) {
+    case 'sprint': boost(b, 440); break;
+    case 'bonk':
+      shove(b, 85, 420);
+      boost(b, 180);
+      addRing(b.x, b.y, R, 85, '#B9814A', 0.4, 8);
+      S.shake = Math.max(S.shake, 5);
+      break;
+    case 'bomb': {
+      const ahead = standings().filter(o => o !== b && progressOf(o) > progressOf(b));
+      const target = ahead.length ? ahead[ahead.length - 1] : pick(racing().filter(o => o !== b)) ;
+      if (target) S.bombs.push({ x: target.x + target.vx * 0.25, y: target.y - 110, vx: target.vx * 0.5, vy: 0, fuse: 0.8 });
+      boost(b, 180);
+      break;
+    }
+    case 'stomp':
+      shove(b, 80, 360, 200);
+      boost(b, 220);
+      b.vy -= 260;
+      addRing(b.x, b.y + R, R, 80, '#8DBE4A', 0.4, 7);
+      S.shake = Math.max(S.shake, 6);
+      break;
+    case 'freeze':                                  // time stops for everyone nearby but him
+      for (const o of rivalsNear(b, 120)) o.frozenT = 1.0;
+      boost(b, 260);
+      addRing(b.x, b.y, R, 120, '#9FE3FF', 0.6, 6);
+      break;
+    case 'spin': boost(b, 400); break;
+    case 'dash': boost(b, 400); b.ghostT = 0.2; break;
+    case 'banana':
+      S.hazards.push({ x: b.x, y: b.y + 4, r: 12, age: 0, owner: b, used: false });
+      boost(b, 260);
+      break;
+    case 'hop': boost(b, 300); b.vy -= 360; break;
+    case 'tire': boost(b, 380); b.heavyT = 1.5; break;
+    case 'jet': boost(b, 480); break;
+    case 'gravity': {                               // drags the rivals just ahead back to her
+      const mine = progressOf(b);
+      for (const o of rivalsNear(b, 140).filter(o => progressOf(o) > mine)) {
+        const dx = b.x - o.x, dy = b.y - o.y, dd = Math.hypot(dx, dy) || 1;
+        o.vx += dx / dd * 260; o.vy += dy / dd * 260;
+        o.slowT = 0.8;
+      }
+      boost(b, 200);
+      addRing(b.x, b.y, 140, R, '#C9A3F0', 0.6, 6);
+      break;
+    }
+  }
+}
+
+function explode(x, y) {
+  for (const o of racing()) {
+    const dx = o.x - x, dy = o.y - y, d = Math.hypot(dx, dy) || 1;
+    if (d > 90) continue;
+    const k = 150 + 520 * (1 - d / 90);
+    o.vx += dx / d * k; o.vy += dy / d * k - 120;
+  }
+  addRing(x, y, 8, 90, '#FF8A1F', 0.55, 12);
+  addPoof(x, y, '#FFB347');
+  addSparks(x, y, 22, ['#FF8A1F', '#FFD54A', '#6B6B6B', '#3A2420'], 420);
+  addFloat(x, y - 22, 'BOOM!', '#FF8A1F', 26, 0.8);
+  S.shake = Math.max(S.shake, 10);
+  S.flash = Math.max(S.flash, 0.15);
+  Sound.explode();
+}
+
+// TRACK FLIP: one ramp tilts the other way (the leader's, if it can).
+function startFlip() {
+  const F = S.floor;
+  const lead = standings()[0];
+  let rp = lead ? F.mods[moduleIndex(lead)].ramp : null;
+  if (!rp || !rp.flippable) rp = pick(F.ramps.filter(r => r.flippable));
+  if (!rp || F.flipping) return;
+  rp.flip = { t: 0, dur: 0.55, c0: rp.cx, c1: 2 * TCX - rp.cx, a0: rp.ang, a1: -rp.ang };
+  rp.mod.dir = -rp.mod.dir;
+  F.flipping = rp;
+  renderFloor(F);
+  S.banner = { text: 'TRACK FLIP!', sub: 'Mamma mia!', life: 1.4, max: 1.4, kind: 'flip' };
+  S.shake = Math.max(S.shake, 8);
+  Sound.flip();
+}
+
+// The door slams: everyone not through is OUT (the last one, or last two).
+function startOut() {
+  const alive = aliveRacers();
+  let losers = alive.filter(b => b.state === 'race');
+  if (losers.length > S.elim) {                   // safety net: only the slowest go out
+    losers.sort((a, b) => progressOf(a) - progressOf(b));
+    for (const b of losers.slice(S.elim)) { b.state = 'done'; S.finished.push(b); b.place = S.finished.length; }
+    losers = losers.slice(0, S.elim);
+  }
+  S.phase = 'out';
+  S.phaseT = 0;
+  S.losers = losers;
+  for (const b of losers) { b.state = 'out'; b.outT = 0; b.frozenT = 0; }
+  const left = aliveRacers();
+  if (left.length === 1) S.winner = left[0];
+  const names = losers.map(b => b.def.name);
+  S.banner = {
+    text: losers.length > 2 ? 'TRIPLE OUT!' : losers.length > 1 ? 'DOUBLE OUT!' : 'OUT!',
+    sub: names.join(' & '), faces: losers.map(b => b.def), life: OUT_DUR + 0.2, max: OUT_DUR + 0.2, kind: 'out',
+  };
+  S.flash = 0.2;
+  S.shake = 9;
+  Sound.eliminated();
+}
+
+function startShift() {
+  const n = aliveRacers().length, timeLeft = S.clock - SHIFT_DUR;
+  const type = pickFloorType(n, planHeat(n, timeLeft).slack);
+  S.plan = planHeat(n, timeLeft, type.pace);
+  S.prevFloor = S.floor;
+  S.floor = buildFloor(type);
+  S.phase = 'shift';
+  S.phaseT = 0;
+  placeInPen();
+  Sound.whoosh();
+}
+
+function startWin() {
+  S.phase = 'win';
+  S.phaseT = 0;
+  const w = S.winner;
+  S.banner = { text: 'WINNER!', sub: w.def.name, face: w.def, life: 999, max: 999, kind: 'win' };
+  addConfetti(90);
+  S.flash = 0.35;
+  Sound.win();
+}
+
+function endRound() {
+  S.clock = 0;
+  S.timeUp = true;
+  if (!S.winner) {                // time ran out mid-race: whoever is furthest ahead wins
+    const order = aliveRacers().sort((a, b) => (b.state === 'done' ? 1000 - b.place : progressOf(b))
+                                              - (a.state === 'done' ? 1000 - a.place : progressOf(a)));
+    S.winner = order[0];
+    addConfetti(60);
+  }
+  const w = S.winner;
+  S.phase = 'end';
+  S.banner = { text: 'WINNER!', sub: w.def.name, face: w.def, life: 999, max: 999, kind: 'win', big: true };
+  S.flash = 0.3;
+  Sound.timeUp();
+}
+
+/* =====================================================================
+   EFFECTS
+   ===================================================================== */
+
+function addRing(x, y, r0, r1, color, life, width) {
+  S.fx.push({ kind: 'ring', x, y, r0, r1, color, life, max: life, width });
+}
+function addSparks(x, y, count, colors, speed) {
+  for (let i = 0; i < count; i++) {
+    const a = rand(0, TAU), s = rand(speed * 0.3, speed), life = rand(0.4, 0.9);
+    S.fx.push({ kind: 'spark', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                color: pick(colors), size: rand(2, 4), life, max: life });
+  }
+}
+// Soft clay smoke puffs.
+function addPoof(x, y, color) {
+  for (let i = 0; i < 7; i++) {
+    const a = rand(0, TAU), s = rand(30, 90), life = rand(0.45, 0.75);
+    S.fx.push({ kind: 'puff', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 20,
+                color: i % 2 ? '#FFFFFF' : lighten(color, 0.5), size: rand(7, 12), life, max: life });
+  }
+}
+function addConfetti(count) {
+  const colors = RAMP_COLORS;
+  for (let i = 0; i < count; i++) {
+    const life = rand(1.8, 3.2);
+    S.fx.push({ kind: 'confetti', x: rand(AX0, AX1), y: rand(-60, 40), vx: rand(-60, 60), vy: rand(40, 160),
+                spin: rand(-8, 8), a: rand(0, TAU), color: pick(colors), size: rand(4, 7), life, max: life });
+  }
+}
+function addFloat(x, y, text, color, size, life) {
+  S.fx.push({ kind: 'float', x, y, text, color, size, life, max: life });
+}
+
+/* =====================================================================
+   UPDATE
+   ===================================================================== */
+
+function update(rdt) {
+  S.time += rdt;
+
+  // Real-time timers
+  S.flash = Math.max(0, S.flash - rdt * 2.2);
+  S.shake = Math.max(0, S.shake - rdt * 40);
+  if (S.banner && (S.banner.life -= rdt) <= 0) S.banner = null;
+
+  for (const f of S.fx) {
+    f.life -= rdt;
+    if (f.kind === 'spark' || f.kind === 'puff') {
+      f.x += f.vx * rdt; f.y += f.vy * rdt;
+      f.vx *= 0.92; f.vy *= 0.92;
+    } else if (f.kind === 'confetti') {
+      f.vy = Math.min(f.vy + 120 * rdt, 170);
+      f.x += (f.vx + Math.sin(S.time * 3 + f.spin) * 30) * rdt; f.y += f.vy * rdt;
+      f.a += f.spin * rdt;
+    }
+  }
+  S.fx = S.fx.filter(f => f.life > 0);
+
+  // Marble looks: squash relaxes, lean into the motion, trails
+  for (const b of S.racers) {
+    b.squash *= Math.exp(-rdt * 10);
+    b.lean = lerp(b.lean, clamp(b.vx / 700, -1, 1) * 0.3, 1 - Math.exp(-rdt * 8));
+    if (b.state === 'race' && b.boostT > 0) { b.trail.push([b.x, b.y]); if (b.trail.length > 8) b.trail.shift(); }
+    else if (b.trail.length) b.trail.shift();
+    if (b.state === 'out') b.outT += rdt;
+  }
+
+  // Round clock (wall-clock time, so the video is exactly 2:00)
+  if (!S.timeUp) {
+    S.clock -= rdt;
+    const whole = Math.ceil(S.clock);
+    if (whole !== S.lastTick && whole <= 5 && whole > 0) Sound.tick();
+    S.lastTick = whole;
+    if (S.clock <= 0) endRound();
+    else Sound.music();
+  }
+  if (S.timeUp) { Recorder.tick(rdt); return; }   // frozen: nothing moves
+
+  S.phaseT += rdt;
+  if (S.phase === 'intro') {
+    if (S.clacks === 0 && S.phaseT >= S.phaseDur - 0.55) { S.clacks = 1; Sound.clack(); }
+    if (S.clacks === 1 && S.phaseT >= S.phaseDur - 0.27) { S.clacks = 2; Sound.clack(); }
+    if (S.phaseT >= S.phaseDur) startRace();
+  } else if (S.phase === 'race') {
+    S.acc += rdt;
+    let steps = 0;
+    while (S.acc >= STEP && steps < 12 && S.phase === 'race') { step(STEP); S.acc -= STEP; steps++; }
+    if (steps === 12) S.acc = 0;
+  } else if (S.phase === 'out') {
+    S.floor.door.close = clamp(S.phaseT / 0.2, 0, 1);
+    if (S.phaseT >= OUT_DUR) { if (S.winner) startWin(); else startShift(); }
+  } else if (S.phase === 'shift') {
+    if (S.phaseT >= SHIFT_DUR) { S.prevFloor = null; beginHeat(); }
+  } else if (S.phase === 'win') {
+    if (Math.random() < rdt * 6) addConfetti(4);
+  }
+}
+
+/* =====================================================================
+   CHARACTERS: every racer is drawn in code (no image files). Drawn in "unit
+   space": the marble is a circle of radius 1 centered at (0, 0); line widths
+   are in the same units. getSprite() scales each one to marble size.
+   ===================================================================== */
+
+function circ(g, x, y, r) { g.beginPath(); g.arc(x, y, r, 0, TAU); }
+function ell(g, x, y, rx, ry, rot = 0) { g.beginPath(); g.ellipse(x, y, rx, ry, rot, 0, TAU); }
+function ink(g, fill, w = 0.07) {
+  g.fillStyle = fill;
+  g.fill();
+  g.lineWidth = w;
+  g.strokeStyle = INK;
+  g.stroke();
+}
+function seg(g, x1, y1, x2, y2, w, color = INK) {
+  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2);
+  g.lineWidth = w; g.lineCap = 'round'; g.strokeStyle = color; g.stroke();
+}
+function dot(g, x, y, r, color = INK) { circ(g, x, y, r); g.fillStyle = color; g.fill(); }
+// Round eye: white, pupil, glint.
+function eye(g, x, y, r, pr = r * 0.5, px = 0, py = 0) {
+  circ(g, x, y, r); ink(g, '#FFFFFF', 0.05);
+  dot(g, x + px, y + py, pr);
+  dot(g, x + px - pr * 0.35, y + py - pr * 0.4, pr * 0.35, '#FFFFFF');
+}
+// Small shiny dot eye.
+function beady(g, x, y, r) { dot(g, x, y, r); dot(g, x - r * 0.35, y - r * 0.35, r * 0.38, '#FFFFFF'); }
+// Clay ball body with a soft light from the top-left.
+function ballBase(g, light, dark) {
+  const gr = g.createRadialGradient(-0.35, -0.42, 0.05, 0, 0, 1.05);
+  gr.addColorStop(0, light);
+  gr.addColorStop(1, dark);
+  circ(g, 0, 0, 1); g.fillStyle = gr; g.fill();
+}
+function inside(g, fn) { g.save(); circ(g, 0, 0, 0.995); g.clip(); fn(); g.restore(); }
+// Outline + matte clay sheen.
+function ballDone(g) {
+  const gr = g.createRadialGradient(-0.42, -0.5, 0, -0.42, -0.5, 0.62);
+  gr.addColorStop(0, 'rgba(255,255,255,0.34)');
+  gr.addColorStop(1, 'rgba(255,255,255,0)');
+  circ(g, 0, 0, 1); g.fillStyle = gr; g.fill();
+  circ(g, 0, 0, 1); g.lineWidth = 0.08; g.strokeStyle = INK; g.stroke();
+}
+// A row of little triangle teeth along a quadratic curve (dir 1 = hanging down).
+function teeth(g, x0, y0, cx, cy, x1, y1, n, len, dir = 1) {
+  const q = (t, a, c, b) => (1 - t) * (1 - t) * a + 2 * (1 - t) * t * c + t * t * b;
+  g.beginPath();
+  for (let i = 0; i < n; i++) {
+    const t0 = 0.08 + i * 0.84 / n, t1 = t0 + 0.84 / n, tm = (t0 + t1) / 2;
+    g.moveTo(q(t0, x0, cx, x1), q(t0, y0, cy, y1));
+    g.lineTo(q(tm, x0, cx, x1), q(tm, y0, cy, y1) + len * dir);
+    g.lineTo(q(t1, x0, cx, x1), q(t1, y0, cy, y1));
+  }
+  g.fillStyle = '#FFFFFF'; g.fill();
+  g.lineWidth = 0.03; g.strokeStyle = INK; g.stroke();
+}
+function smile(g, x0, x1, y, depth, w = 0.08) {
+  g.beginPath(); g.moveTo(x0, y); g.quadraticCurveTo((x0 + x1) / 2, y + depth, x1, y);
+  g.lineWidth = w; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+}
+
+const FACES = {
+  tralalero(g) {                                       // blue shark in sneakers
+    g.beginPath(); g.moveTo(-0.32, -0.78); g.quadraticCurveTo(0.05, -1.2, 0.3, -1.45);
+    g.quadraticCurveTo(0.32, -1.02, 0.52, -0.7); g.closePath(); ink(g, '#4A86CF');
+    for (const s of [-1, 1]) {
+      ell(g, s * 0.46, 0.98, 0.32, 0.17); ink(g, '#FFFFFF');
+      seg(g, s * 0.46 - 0.2, 1.0, s * 0.46 + 0.16, 0.94, 0.06, '#3D7BFF');
+    }
+    ballBase(g, '#9CCBF7', '#3A73B8');
+    inside(g, () => { ell(g, 0, 0.78, 1.05, 0.62); g.fillStyle = '#F2F6FA'; g.fill(); });
+    for (const s of [-1, 1]) beady(g, s * 0.4, -0.22, 0.12);
+    g.beginPath(); g.moveTo(-0.62, 0.26); g.quadraticCurveTo(0, 1.0, 0.62, 0.26);
+    g.quadraticCurveTo(0, 0.42, -0.62, 0.26); g.closePath(); ink(g, '#8E2430', 0.06);
+    teeth(g, -0.62, 0.26, 0, 0.42, 0.62, 0.26, 7, 0.13, 1);
+    ballDone(g);
+  },
+  tung(g) {                                            // wooden log with a bat
+    g.save(); g.translate(0.82, 0.05); g.rotate(-0.55);
+    g.beginPath(); g.moveTo(-0.07, 0.8); g.lineTo(0.07, 0.8); g.lineTo(0.17, -0.7);
+    g.quadraticCurveTo(0, -0.92, -0.17, -0.7); g.closePath(); ink(g, '#C08A50');
+    g.restore();
+    ballBase(g, '#F5CB93', '#B8834E');
+    inside(g, () => {
+      g.strokeStyle = 'rgba(140,85,40,0.35)'; g.lineWidth = 0.05;
+      for (const x of [-0.72, -0.5, 0.52, 0.74]) { g.beginPath(); g.moveTo(x, -1); g.quadraticCurveTo(x + 0.1, 0, x - 0.04, 1); g.stroke(); }
+    });
+    for (const s of [-1, 1]) eye(g, s * 0.34, -0.1, 0.25, 0.07);
+    for (const s of [-1, 1]) seg(g, s * 0.14, -0.44, s * 0.56, -0.52, 0.12, '#4A2A14');
+    smile(g, -0.42, 0.42, 0.42, 0.18);
+    ballDone(g);
+  },
+  bombardiro(g) {                                      // crocodile bomber plane
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.55, 0.0); g.lineTo(s * 1.55, 0.14); g.lineTo(s * 1.5, 0.38); g.lineTo(s * 0.55, 0.4);
+      g.closePath(); ink(g, '#8E9C72');
+    }
+    for (const s of [-1, 1]) { circ(g, s * 0.38, -0.74, 0.28); ink(g, '#5FA84A'); }
+    ballBase(g, '#93D46E', '#3E7F2E');
+    inside(g, () => {
+      ell(g, 0, 0.48, 0.92, 0.55); g.fillStyle = '#B4E296'; g.fill();
+      g.fillStyle = 'rgba(40,90,30,0.3)';
+      for (const [x, y] of [[-0.6, -0.3], [0.62, -0.25], [-0.15, -0.45], [0.2, -0.55], [-0.75, 0.1], [0.78, 0.15]]) { circ(g, x, y, 0.07); g.fill(); }
+    });
+    for (const s of [-1, 1]) {
+      circ(g, s * 0.38, -0.74, 0.17); ink(g, '#F7D748', 0.05);
+      ell(g, s * 0.38, -0.74, 0.045, 0.13); g.fillStyle = INK; g.fill();
+    }
+    for (const s of [-1, 1]) dot(g, s * 0.16, 0.14, 0.055);
+    g.beginPath(); g.moveTo(-0.72, 0.46); g.quadraticCurveTo(0, 0.82, 0.72, 0.46);
+    g.lineWidth = 0.07; g.strokeStyle = INK; g.stroke();
+    teeth(g, -0.72, 0.46, 0, 0.82, 0.72, 0.46, 8, -0.12, 1);
+    ballDone(g);
+  },
+  patapim(g) {                                         // tree-monkey with giant feet
+    for (const [x, y, a] of [[-0.72, -0.72, -0.8], [-0.38, -0.98, -0.35], [0, -1.08, 0], [0.38, -0.98, 0.35], [0.72, -0.72, 0.8]]) {
+      ell(g, x, y, 0.22, 0.38, a); ink(g, '#6DBB45');
+    }
+    for (const s of [-1, 1]) { ell(g, s * 0.52, 1.0, 0.38, 0.18); ink(g, '#E2B48A'); }
+    ballBase(g, '#C08B5A', '#6E4426');
+    inside(g, () => { ell(g, 0, 0.2, 0.74, 0.72); g.fillStyle = '#EDCDA6'; g.fill(); });
+    for (const s of [-1, 1]) eye(g, s * 0.3, -0.12, 0.15, 0.08);
+    g.beginPath(); g.moveTo(-0.1, -0.02); g.quadraticCurveTo(-0.36, 0.56, -0.04, 0.64);
+    g.quadraticCurveTo(0.34, 0.62, 0.12, -0.02); g.closePath(); ink(g, '#D9876A', 0.06);
+    seg(g, -0.18, 0.8, 0.18, 0.8, 0.06);
+    ballDone(g);
+  },
+  lirili(g) {                                          // elephant-cactus
+    for (const s of [-1, 1]) {
+      ell(g, s * 0.92, -0.05, 0.42, 0.6, s * 0.2); ink(g, '#B5BDC4');
+      ell(g, s * 0.95, -0.02, 0.25, 0.4, s * 0.2); g.fillStyle = '#EBB0BE'; g.fill();
+    }
+    ballBase(g, '#DCE2E6', '#7E8992');
+    inside(g, () => {
+      ell(g, 0, -0.98, 1.05, 0.56); g.fillStyle = '#6FB04A'; g.fill();
+      g.strokeStyle = '#4E8A33'; g.lineWidth = 0.05;
+      for (const x of [-0.5, 0, 0.5]) { g.beginPath(); g.moveTo(x, -1); g.quadraticCurveTo(x * 1.1, -0.7, x * 0.9, -0.45); g.stroke(); }
+    });
+    for (let a = 200; a <= 340; a += 20) {               // cactus spines
+      const c = Math.cos(a * DEG), s = Math.sin(a * DEG);
+      seg(g, c * 0.98, s * 0.98, c * 1.16, s * 1.16, 0.04, '#FFFFFF');
+    }
+    for (const s of [-1, 1]) beady(g, s * 0.32, -0.1, 0.09);
+    g.beginPath(); g.moveTo(0, -0.05); g.quadraticCurveTo(0.06, 0.55, -0.06, 0.74); g.quadraticCurveTo(-0.12, 0.92, 0.14, 0.92);
+    g.lineCap = 'round'; g.lineWidth = 0.36; g.strokeStyle = INK; g.stroke();
+    g.lineWidth = 0.26; g.strokeStyle = '#A9B2BA'; g.stroke();
+    ballDone(g);
+  },
+  ballerina(g) {                                       // cappuccino-cup ballerina
+    ell(g, 0, 0.84, 1.3, 0.3); ink(g, '#F7A8C8');
+    for (let i = -5; i <= 5; i++) { circ(g, i * 0.22, 1.05, 0.1); ink(g, '#F9BCD6', 0.04); }
+    circ(g, 1.0, 0.08, 0.28); g.lineWidth = 0.22; g.strokeStyle = INK; g.stroke();
+    g.lineWidth = 0.13; g.strokeStyle = '#FFFFFF'; g.stroke();
+    ballBase(g, '#FFFFFF', '#D2D6DE');
+    inside(g, () => {
+      ell(g, 0, -0.8, 1.06, 0.5); g.fillStyle = '#C88A55'; g.fill();
+      ell(g, 0, -0.82, 0.92, 0.38); g.fillStyle = '#F3DFBE'; g.fill();
+      g.beginPath(); g.moveTo(0, -0.66); g.bezierCurveTo(-0.3, -0.85, -0.12, -1.05, 0, -0.9);
+      g.bezierCurveTo(0.12, -1.05, 0.3, -0.85, 0, -0.66); g.fillStyle = '#FFFFFF'; g.fill();
+      g.fillStyle = '#F7A8C8'; g.fillRect(-1, 0.5, 2, 0.12);
+    });
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.arc(s * 0.32, 0.02, 0.13, Math.PI * 1.1, Math.PI * 1.9);
+      g.lineWidth = 0.07; g.strokeStyle = INK; g.stroke();
+      seg(g, s * 0.32 + s * 0.12, -0.06, s * 0.32 + s * 0.2, -0.14, 0.04);
+      circ(g, s * 0.52, 0.24, 0.11); g.fillStyle = 'rgba(242,123,176,0.55)'; g.fill();
+    }
+    smile(g, -0.16, 0.16, 0.3, 0.12, 0.06);
+    ballDone(g);
+  },
+  assassino(g) {                                       // ninja espresso cup
+    for (const s of [-1, 1]) {
+      g.save(); g.rotate(s * 0.62);
+      seg(g, 0, -1.55, 0, 0.5, 0.14); seg(g, 0, -1.55, 0, 0.5, 0.07, '#DCE3EA');
+      seg(g, 0, -1.62, 0, -1.2, 0.17, '#2A2A2A');
+      g.restore();
+    }
+    circ(g, 1.0, 0.18, 0.27); g.lineWidth = 0.22; g.strokeStyle = INK; g.stroke();
+    g.lineWidth = 0.13; g.strokeStyle = '#9C6A42'; g.stroke();
+    ballBase(g, '#C48C5E', '#5E3B22');
+    inside(g, () => {
+      ell(g, 0, -0.82, 1.02, 0.46); g.fillStyle = '#3B2316'; g.fill();
+      ell(g, 0, -0.85, 0.86, 0.3); g.fillStyle = '#C98A4E'; g.fill();
+      g.fillStyle = '#1E1E24'; g.fillRect(-1, -0.3, 2, 0.42);
+    });
+    g.beginPath(); g.moveTo(-0.95, -0.24); g.quadraticCurveTo(-1.4, -0.3, -1.5, 0.02);
+    g.quadraticCurveTo(-1.32, -0.08, -0.95, 0.04); g.closePath(); ink(g, '#1E1E24', 0.05);
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.1, -0.12); g.lineTo(s * 0.58, -0.22); g.lineTo(s * 0.52, 0.02); g.closePath();
+      g.fillStyle = '#FFFFFF'; g.fill();
+      dot(g, s * 0.38, -0.08, 0.055);
+    }
+    ballDone(g);
+  },
+  bananini(g) {                                        // chimp popping out of a banana
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.3, -0.45); g.quadraticCurveTo(s * 1.3, -0.9, s * 1.28, 0.1);
+      g.quadraticCurveTo(s * 0.98, -0.18, s * 0.6, -0.05); g.closePath(); ink(g, '#F7D44A');
+    }
+    ballBase(g, '#FFE98C', '#E2AE1E');
+    inside(g, () => {
+      for (const s of [-1, 1]) { circ(g, s * 0.66, -0.36, 0.17); ink(g, '#7A4E2D', 0.05); }
+      circ(g, 0, -0.32, 0.64); ink(g, '#7A4E2D', 0.05);
+      ell(g, 0, -0.2, 0.46, 0.4); g.fillStyle = '#EDCDA6'; g.fill();
+      g.beginPath(); g.moveTo(-1.1, 0.3);
+      for (let i = 0; i <= 9; i++) g.lineTo(-1.1 + i * 0.244, 0.3 + (i % 2 ? -0.17 : 0.06));
+      g.lineTo(1.2, 1.2); g.lineTo(-1.2, 1.2); g.closePath(); ink(g, '#FFE070', 0.05);
+    });
+    for (const s of [-1, 1]) beady(g, s * 0.17, -0.3, 0.08);
+    for (const s of [-1, 1]) dot(g, s * 0.06, -0.14, 0.03);
+    smile(g, -0.18, 0.18, -0.04, 0.12, 0.05);
+    ballDone(g);
+  },
+  trippi(g) {                                          // cat-headed shrimp
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.15, -0.85); g.quadraticCurveTo(s * 0.5, -1.62, s * 1.25, -1.35);
+      g.lineWidth = 0.07; g.lineCap = 'round'; g.strokeStyle = '#D94F2B'; g.stroke();
+      g.beginPath(); g.moveTo(s * 0.22, -0.82); g.lineTo(s * 0.6, -1.25); g.lineTo(s * 0.86, -0.56); g.closePath();
+      ink(g, '#F59A7A');
+      g.beginPath(); g.moveTo(s * 0.34, -0.82); g.lineTo(s * 0.6, -1.1); g.lineTo(s * 0.74, -0.68); g.closePath();
+      g.fillStyle = '#FFC4C4'; g.fill();
+    }
+    ballBase(g, '#FFBE9C', '#E0603F');
+    inside(g, () => {
+      g.strokeStyle = 'rgba(170,60,30,0.45)'; g.lineWidth = 0.06;
+      for (const y of [0.52, 0.7, 0.88]) { g.beginPath(); g.moveTo(-1, y - 0.1); g.quadraticCurveTo(0, y + 0.12, 1, y - 0.1); g.stroke(); }
+    });
+    for (const s of [-1, 1]) {
+      ell(g, s * 0.33, -0.12, 0.17, 0.2); ink(g, '#A6E36A', 0.05);
+      ell(g, s * 0.33, -0.12, 0.04, 0.15); g.fillStyle = INK; g.fill();
+      for (const dy of [-0.06, 0.08]) seg(g, s * 0.5, 0.2 + dy, s * 1.15, 0.12 + dy * 1.8, 0.03);
+    }
+    g.beginPath(); g.moveTo(-0.08, 0.1); g.lineTo(0.08, 0.1); g.lineTo(0, 0.2); g.closePath(); ink(g, '#F48FB1', 0.03);
+    g.beginPath(); g.arc(-0.08, 0.24, 0.08, 0, Math.PI); g.arc(0.08, 0.24, 0.08, 0, Math.PI);
+    g.lineWidth = 0.05; g.strokeStyle = INK; g.stroke();
+    ballDone(g);
+  },
+  boneca(g) {                                          // frog in a tire
+    for (const s of [-1, 1]) { circ(g, s * 0.42, -0.78, 0.31); ink(g, '#6CC24A'); }
+    ballBase(g, '#A4E480', '#4C9A3C');
+    inside(g, () => {
+      g.fillStyle = '#3A3A3A'; g.fillRect(-1, 0.4, 2, 0.7);
+      g.strokeStyle = '#5E5E5E'; g.lineWidth = 0.08;
+      for (let x = -1; x <= 1; x += 0.26) { g.beginPath(); g.moveTo(x, 0.46); g.lineTo(x + 0.13, 0.66); g.lineTo(x, 0.86); g.stroke(); }
+      seg(g, -1, 0.4, 1, 0.4, 0.05, '#222222');
+    });
+    for (const s of [-1, 1]) eye(g, s * 0.42, -0.8, 0.2, 0.1, 0, 0.02);
+    for (const s of [-1, 1]) dot(g, s * 0.1, -0.18, 0.04);
+    smile(g, -0.62, 0.62, 0.02, 0.3, 0.08);
+    ballDone(g);
+  },
+  gusini(g) {                                          // goose fighter jet
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.5, 0.02); g.lineTo(s * 1.52, 0.46); g.lineTo(s * 1.44, 0.64); g.lineTo(s * 0.55, 0.44);
+      g.closePath(); ink(g, '#B8C1CA');
+    }
+    ballBase(g, '#FFFFFF', '#CFCAC0');
+    inside(g, () => {
+      ell(g, 0, -0.88, 1.1, 0.66); g.fillStyle = '#8B5A2B'; g.fill();
+      seg(g, -1, -0.42, 1, -0.42, 0.12, '#5C3A1A');
+    });
+    for (const s of [-1, 1]) { circ(g, s * 0.3, -0.44, 0.17); ink(g, '#9ED8F0', 0.07); }
+    for (const s of [-1, 1]) beady(g, s * 0.28, -0.02, 0.08);
+    ell(g, 0, 0.4, 0.46, 0.26); ink(g, '#FF9F1C');
+    seg(g, -0.4, 0.42, 0.4, 0.42, 0.05);
+    for (const s of [-1, 1]) dot(g, s * 0.1, 0.3, 0.03);
+    ballDone(g);
+  },
+  saturnita(g) {                                       // cow on planet Saturn
+    const ring = front => {
+      g.save(); g.rotate(-0.22);
+      g.beginPath(); g.ellipse(0, 0.12, 1.5, 0.36, 0, front ? 0 : Math.PI, front ? Math.PI : TAU);
+      g.lineWidth = 0.27; g.lineCap = 'butt'; g.strokeStyle = INK; g.stroke();
+      g.lineWidth = 0.17; g.strokeStyle = '#EBBE72'; g.stroke();
+      g.restore();
+    };
+    ring(false);
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.32, -0.88); g.quadraticCurveTo(s * 0.62, -1.3, s * 0.82, -1.1);
+      g.quadraticCurveTo(s * 0.6, -1.0, s * 0.56, -0.8); g.closePath(); ink(g, '#F6EBD6', 0.05);
+      ell(g, s * 0.98, -0.38, 0.26, 0.13, s * 0.3); ink(g, '#F2E4D8', 0.05);
+    }
+    ballBase(g, '#F8DBA6', '#C98A4E');
+    inside(g, () => {
+      g.fillStyle = 'rgba(175,105,45,0.32)';
+      g.fillRect(-1, -0.66, 2, 0.12); g.fillRect(-1, 0.6, 2, 0.14);
+      ell(g, 0, 0.02, 0.64, 0.68); g.fillStyle = '#FBF6EF'; g.fill();
+      g.fillStyle = '#2E2A2A';
+      ell(g, -0.42, -0.42, 0.2, 0.15, 0.4); g.fill();
+      ell(g, 0.48, 0.0, 0.14, 0.2, -0.3); g.fill();
+    });
+    for (const s of [-1, 1]) beady(g, s * 0.26, -0.16, 0.09);
+    ell(g, 0, 0.36, 0.42, 0.26); ink(g, '#F7A1B0', 0.06);
+    for (const s of [-1, 1]) dot(g, s * 0.14, 0.36, 0.05);
+    ballDone(g);
+    ring(true);
+  },
+};
+
+/* =====================================================================
+   RENDERING
+   ===================================================================== */
+
+// Each racer is pre-rendered once per size (and once grayed out for the strip).
+const sprites = new Map();
+
+function getSprite(def, r, gray = false) {
+  const key = `${def.id}|${r}|${gray ? 1 : 0}`;
+  let s = sprites.get(key);
+  if (s) return s;
+  const size = r * 2 * 1.75;                       // room for fins, ears, wings and rings
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  if (gray) {
+    g.filter = 'grayscale(1) brightness(0.75)';
+    g.drawImage(getSprite(def, r).canvas, 0, 0);
+  } else {
+    g.scale(c.width / size, c.height / size);
+    g.translate(size / 2, size / 2);
+    g.scale(r, r);
+    g.lineJoin = 'round';
+    FACES[def.id](g);
+  }
+  s = { canvas: c, size };
+  sprites.set(key, s);
+  return s;
+}
+
+// Soft round shadow under every marble (cached).
+function getShadow() {
+  const key = 'shadow';
+  let s = sprites.get(key);
+  if (s) return s;
+  const size = R * 3;
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  g.scale(c.width / size, c.height / size);
+  const gr = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  gr.addColorStop(0, 'rgba(70,40,30,0.35)');
+  gr.addColorStop(0.55, 'rgba(70,40,30,0.25)');
+  gr.addColorStop(1, 'rgba(70,40,30,0)');
+  g.fillStyle = gr;
+  g.fillRect(0, 0, size, size);
+  s = { canvas: c, size };
+  sprites.set(key, s);
+  return s;
+}
+
+// A swinging pizza (cached, rotated when drawn).
+function getPizza() {
+  let s = sprites.get('pizza');
+  if (s) return s;
+  const r = TUNING.pizzaR, size = r * 2 + 6;
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  g.scale(c.width / size, c.height / size);
+  g.translate(size / 2, size / 2);
+  circ(g, 0, 0, r); g.fillStyle = '#E7B867'; g.fill(); g.lineWidth = 2; g.strokeStyle = INK; g.stroke();
+  circ(g, 0, 0, r * 0.78); g.fillStyle = '#D9442B'; g.fill();
+  g.fillStyle = '#FCE38A';
+  for (const [x, y, rr] of [[-4, -3, 4], [4, 2, 4.5], [-1, 5, 3.5], [5, -5, 3]]) { circ(g, x, y, rr); g.fill(); }
+  g.fillStyle = '#A8302A';
+  for (const [x, y] of [[-5, 3], [3, -2], [1, 6], [-3, -6]]) { circ(g, x, y, 2.2); g.fill(); }
+  s = { canvas: c, size };
+  sprites.set('pizza', s);
+  return s;
+}
+
+// Sky, clay clouds and sun, Tuscan hills, the hook lettering, the racer-strip plaque.
+let backdrop = null;
+function buildBackdrop() {
+  backdrop = document.createElement('canvas');
+  backdrop.width = canvas.width;
+  backdrop.height = canvas.height;
+  const g = backdrop.getContext('2d');
+  g.scale(scale, scale);
+  const sky = g.createLinearGradient(0, L.panelTop, 0, L.panelBottom);
+  sky.addColorStop(0, '#7EC8F0');
+  sky.addColorStop(0.55, '#C3EAF8');
+  sky.addColorStop(1, '#FFE3BC');
+  g.fillStyle = sky;
+  g.fillRect(0, 0, LW, LH);
+
+  // Clay sun (right margin, above TikTok's buttons)
+  const sx = 512, sy = L.trackTop + 64;
+  g.fillStyle = '#FFB938';
+  for (let i = 0; i < 12; i++) {
+    const a = i / 12 * TAU;
+    ell(g, sx + Math.cos(a) * 44, sy + Math.sin(a) * 44, 11, 6, a); g.fill();
+  }
+  circ(g, sx, sy, 34);
+  const sg = g.createRadialGradient(sx - 10, sy - 12, 4, sx, sy, 36);
+  sg.addColorStop(0, '#FFF0A0'); sg.addColorStop(1, '#FFC23A');
+  g.fillStyle = sg; g.fill();
+  g.lineWidth = 3; g.strokeStyle = 'rgba(58,36,32,0.5)'; g.stroke();
+
+  // Clay clouds
+  const cloud = (x, y, k) => {
+    g.save();
+    g.shadowColor = 'rgba(80,110,140,0.25)'; g.shadowBlur = blur(6); g.shadowOffsetY = 3 * scale;
+    g.fillStyle = '#FFFFFF';
+    for (const [dx, dy, r] of [[-26, 4, 16], [-8, -8, 20], [14, -4, 18], [30, 6, 13], [0, 8, 16]]) { circ(g, x + dx * k, y + dy * k, r * k); g.fill(); }
+    g.restore();
+  };
+  cloud(60, L.panelTop + 186, 0.8);
+  cloud(470, L.panelTop + 200, 0.7);
+  cloud(140, L.trackTop + 300, 1.0);
+  cloud(380, L.trackTop + 150, 0.9);
+
+  // Rolling Tuscan hills with cypress trees and a tiny leaning tower
+  const hill = (y0, amp, color, phase) => {
+    g.beginPath(); g.moveTo(0, L.panelBottom);
+    for (let x = 0; x <= LW; x += 10) g.lineTo(x, y0 + Math.sin(x * 0.012 + phase) * amp);
+    g.lineTo(LW, L.panelBottom); g.closePath(); g.fillStyle = color; g.fill();
+  };
+  hill(L.panelBottom - 150, 18, '#B9E28C', 0.5);
+  for (const [x, h] of [[90, 46], [112, 36], [400, 50], [425, 38]]) {
+    const y = L.panelBottom - 150 + Math.sin(x * 0.012 + 0.5) * 18;
+    ell(g, x, y - h / 2, 7, h / 2); g.fillStyle = '#4E8A3E'; g.fill();
+  }
+  g.save(); g.translate(300, L.panelBottom - 160); g.rotate(0.12);       // leaning tower
+  g.fillStyle = '#F4EBDD'; g.fillRect(-9, -58, 18, 58);
+  g.strokeStyle = 'rgba(58,36,32,0.35)'; g.lineWidth = 1.2;
+  for (let y = -50; y < 0; y += 9) { g.beginPath(); g.moveTo(-9, y); g.lineTo(9, y); g.stroke(); }
+  g.strokeRect(-9, -58, 18, 58);
+  g.restore();
+  hill(L.panelBottom - 95, 14, '#97D06A', 2.0);
+
+  // Soft cream board behind the track so the ramps read clearly
+  g.fillStyle = 'rgba(255,250,240,0.42)';
+  roundRect(g, AX0 - 4, L.trackTop - 6, AX1 - AX0 + 8, L.panelBottom - L.trackTop + 6, 18);
+  g.fill();
+
+  // Clay speckle texture over everything
+  let seed = 11;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 900; i++) {
+    g.fillStyle = rnd() < 0.5 ? 'rgba(255,255,255,0.10)' : 'rgba(90,60,40,0.06)';
+    circ(g, rnd() * LW, L.panelTop + rnd() * (L.panelBottom - L.panelTop), 0.6 + rnd() * 1.4); g.fill();
+  }
+
+  // The hook, in chunky clay letters
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  fitFont(g, HOOK[0], 260, 19);
+  g.lineJoin = 'round'; g.lineWidth = 4; g.strokeStyle = CREAM; g.strokeText(HOOK[0], L.cx, L.hudY + 1);
+  g.fillStyle = INK; g.fillText(HOOK[0], L.cx, L.hudY + 1);
+  fitFont(g, HOOK[1], 470, 42);
+  clayText(g, HOOK[1], L.cx, L.title2, '#FFD23F', 5, 8);
+  fitFont(g, HOOK[2], 480, 46);
+  clayText(g, HOOK[2], L.cx, L.title3, '#FF6FA8', 5, 8);
+
+  // Plaque behind the racer strip
+  g.save();
+  g.shadowColor = 'rgba(70,40,30,0.3)'; g.shadowBlur = blur(5); g.shadowOffsetY = 3 * scale;
+  roundRect(g, 14, L.stripY - 20, LW - 28, 40, 20);
+  g.fillStyle = '#FFF1D6'; g.fill();
+  g.restore();
+  roundRect(g, 14, L.stripY - 20, LW - 28, 40, 20);
+  g.lineWidth = 3; g.strokeStyle = INK; g.stroke();
+}
+
+// Thick clay line (ramps, walls): drop shadow, outline, body, highlight.
+function clayLine(g, pts, color, w, soft) {
+  const path = () => {
+    g.beginPath();
+    g.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
+  };
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  g.save();
+  if (soft) { g.shadowColor = 'rgba(70,40,30,0.35)'; g.shadowBlur = blur(6); g.shadowOffsetX = 2 * scale; g.shadowOffsetY = 4 * scale; }
+  else { g.translate(2, 4); path(); g.strokeStyle = 'rgba(70,40,30,0.25)'; g.lineWidth = w + 3; g.stroke(); g.translate(-2, -4); }
+  path(); g.strokeStyle = INK; g.lineWidth = w + 3; g.stroke();
+  g.restore();
+  path(); g.strokeStyle = color; g.lineWidth = w; g.stroke();
+  g.save(); g.translate(0, -w * 0.18);
+  path(); g.strokeStyle = lighten(color, 0.4); g.lineWidth = w * 0.3; g.stroke();
+  g.restore();
+}
+
+function clayBall(g, x, y, r, color, soft) {
+  g.save();
+  if (soft) { g.shadowColor = 'rgba(70,40,30,0.35)'; g.shadowBlur = blur(4); g.shadowOffsetX = 1.5 * scale; g.shadowOffsetY = 3 * scale; }
+  circ(g, x, y, r);
+  const gr = g.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.1, x, y, r);
+  gr.addColorStop(0, lighten(color, 0.35));
+  gr.addColorStop(1, color);
+  g.fillStyle = gr; g.fill();
+  g.restore();
+  circ(g, x, y, r); g.lineWidth = 1.8; g.strokeStyle = INK; g.stroke();
+}
+
+// One ramp with its static features (meatballs, espresso pad, stairs).
+function drawRamp(g, rp, soft) {
+  if (rp.stairs) {                                       // spaghetti stairs: solid clay steps
+    const pts = rp.stairs, base = Math.max(...pts.map(p => p[1])) + 8;
+    g.save();
+    if (soft) { g.shadowColor = 'rgba(70,40,30,0.35)'; g.shadowBlur = blur(6); g.shadowOffsetX = 2 * scale; g.shadowOffsetY = 4 * scale; }
+    g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
+    for (const p of pts) g.lineTo(p[0], p[1]);
+    g.lineTo(pts[pts.length - 1][0], base); g.lineTo(pts[0][0], base); g.closePath();
+    g.fillStyle = '#F7D774'; g.fill();
+    g.restore();
+    g.lineWidth = 2.5; g.strokeStyle = INK; g.lineJoin = 'round'; g.stroke();
+    g.strokeStyle = 'rgba(214,150,40,0.7)'; g.lineWidth = 1.6;          // spaghetti squiggles
+    for (let i = 0; i < pts.length - 1; i += 2) {
+      const [x1, y1] = pts[i], [x2] = pts[i + 1];
+      g.beginPath();
+      for (let x = Math.min(x1, x2) + 4; x < Math.max(x1, x2) - 4; x += 3) g.lineTo(x, y1 + 9 + Math.sin(x * 0.6) * 2.5);
+      g.stroke();
+    }
+    clayLine(g, pts, rp.color, 6, false);
+    return;
+  }
+  for (const part of rp.parts) {
+    clayLine(g, [rampPt(rp, part[0]), rampPt(rp, part[1])], rp.color, T, soft);
+  }
+  if (rp.boost) {                                        // espresso pad
+    const a = rampPt(rp, rp.boost[0], T / 2 - 1), b = rampPt(rp, rp.boost[1], T / 2 - 1);
+    g.lineCap = 'round';
+    seg(g, a[0], a[1], b[0], b[1], 7, INK);
+    seg(g, a[0], a[1], b[0], b[1], 5, '#5A3420');
+  }
+  for (const m of rp.meats) {                            // meatballs with sauce
+    clayBall(g, m.x, m.y, m.r, '#9A5434', soft);
+    ell(g, m.x - 1, m.y - m.r * 0.45, m.r * 0.7, m.r * 0.38); g.fillStyle = '#D93A2B'; g.fill();
+    dot(g, m.x + 3, m.y + 2, 1.6, '#6E3420');
+  }
+}
+
+/* Everything on a floor that doesn't move, drawn once into its own canvas
+   (track units, with a margin above y = 0 for the starting box's awning). */
+const FLOOR_PAD = 24;
+function renderFloor(F) {
+  const c = F.canvas || document.createElement('canvas');
+  c.width = Math.ceil(LW * scale);
+  c.height = Math.ceil((TH + FLOOR_PAD) * scale);
+  const g = c.getContext('2d');
+  g.setTransform(scale, 0, 0, scale, 0, FLOOR_PAD * scale);
+  g.clearRect(-10, -FLOOR_PAD, LW + 20, TH + FLOOR_PAD + 10);
+  F.canvas = c;
+
+  // Olives
+  for (const p of F.pegs) {
+    clayBall(g, p.x, p.y, p.r, '#8DB33A', true);
+    dot(g, p.x + 1.5, p.y - 1, 2.6, '#E5533D');
+  }
+  if (F.deflector) {
+    const d = F.deflector;
+    clayLine(g, [[d.x1, d.y1], [d.x2, d.y2]], '#F4A261', T, true);
+  }
+  // Ramps (a ramp mid-flip is drawn live instead)
+  for (const rp of F.ramps) if (rp !== F.flipping) drawRamp(g, rp, true);
+  // Trapdoor hinges and the hole they cover
+  for (const tr of F.traps) {
+    const ex = tr.hx + Math.cos(tr.closed) * tr.len, ey = tr.hy + Math.sin(tr.closed) * tr.len;
+    g.save(); g.setLineDash([3, 3]);
+    seg(g, tr.hx, tr.hy + 6, ex, ey + 6, 1.5, 'rgba(58,36,32,0.5)');
+    g.restore();
+  }
+  // Pizza hangers
+  for (const p of F.pends) {
+    g.fillStyle = '#7A4A2A'; roundRect(g, p.px - 6, p.py - 4, 12, 7, 3); g.fill();
+    g.lineWidth = 1.5; g.strokeStyle = INK; g.stroke();
+  }
+
+  // Walls: terracotta clay pillars, with the finish door cut into the left one
+  const D = F.door;
+  const wall = (x, y1, y2) => clayLine(g, [[x, y1], [x, y2]], '#E07A5F', 14, true);
+  wall(AX0 - 3, -2, D.top - 4);
+  wall(AX0 - 3, D.bot + 6, TH + 20);
+  wall(AX1 + 3, -2, TH + 20);
+  // Finish door: glowing arch + checkered flag
+  g.save();
+  roundRect(g, -6, D.top - 6, 30, D.bot - D.top + 8, 10);
+  const glow = g.createLinearGradient(0, D.top, 0, D.bot);
+  glow.addColorStop(0, '#FFF6C8'); glow.addColorStop(1, '#FFD36B');
+  g.fillStyle = glow; g.fill();
+  g.lineWidth = 3; g.strokeStyle = INK; g.stroke();
+  g.restore();
+  const fx = AX0 + 10, fy = D.top - 30;
+  seg(g, fx, fy, fx, D.top - 2, 2.5, INK);
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 4; j++) {
+    g.fillStyle = (i + j) % 2 ? '#FFFFFF' : '#2B2B2B';
+    g.fillRect(fx + 1 + j * 5, fy + i * 5, 5, 5);
+  }
+  g.lineWidth = 1.2; g.strokeStyle = INK; g.strokeRect(fx + 1, fy, 20, 15);
+  g.font = `700 9px ${CLAY}`; g.textAlign = 'left'; g.textBaseline = 'middle';
+  g.lineWidth = 3; g.strokeStyle = CREAM; g.strokeText('FINISH', fx + 24, fy + 8);
+  g.fillStyle = INK; g.fillText('FINISH', fx + 24, fy + 8);
+
+  // Starting box: posts and a striped café awning
+  const P = F.pen;
+  clayLine(g, [[P.x0 - T / 2, 2], [P.x0 - T / 2, P.y]], '#F4A261', T, true);
+  clayLine(g, [[P.x1 + T / 2, 2], [P.x1 + T / 2, P.y]], '#F4A261', T, true);
+  const aw0 = P.x0 - 14, aw1 = P.x1 + 14, ay = -14, n = 12, sw = (aw1 - aw0) / n;
+  for (let i = 0; i < n; i++) {
+    g.beginPath();
+    g.moveTo(aw0 + i * sw, ay); g.lineTo(aw0 + (i + 1) * sw, ay);
+    g.lineTo(aw0 + (i + 1) * sw, ay + 10); g.arc(aw0 + (i + 0.5) * sw, ay + 10, sw / 2, 0, Math.PI);
+    g.closePath(); g.fillStyle = i % 2 ? '#FFFFFF' : '#E63946'; g.fill();
+  }
+  g.beginPath(); g.moveTo(aw0, ay);
+  for (let i = 0; i < n; i++) g.arc(aw0 + (i + 0.5) * sw, ay + 10, sw / 2, Math.PI, 0, true);
+  g.lineTo(aw1, ay); g.closePath();
+  g.lineWidth = 2; g.strokeStyle = INK; g.stroke();
+}
+
+// Moving parts of a floor: the gate, trapdoors, pizzas, espresso arrows, door, a flipping ramp.
+function drawFloorLive(F) {
+  const P = F.pen;
+  if (P.open < 1) {
+    clayLine(ctx, [[P.x0 - T / 2, P.y], [lerp(TCX, P.x0 - T / 2, P.open), P.y]], '#F4A261', T, false);
+    clayLine(ctx, [[lerp(TCX, P.x1 + T / 2, P.open), P.y], [P.x1 + T / 2, P.y]], '#F4A261', T, false);
+  }
+  for (const tr of F.traps) {
+    const ang = S.floor === F ? tr.ang : tr.closed;
+    clayLine(ctx, [[tr.hx, tr.hy], [tr.hx + Math.cos(ang) * tr.len, tr.hy + Math.sin(ang) * tr.len]], '#D99A5B', T, false);
+    dot(ctx, tr.hx, tr.hy, 3, INK);
+  }
+  const pz = getPizza();
+  for (const p of F.pends) {
+    seg(ctx, p.px, p.py, p.x, p.y, 1.6, '#7A4A2A');
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(-p.ang * 2);
+    ctx.drawImage(pz.canvas, -pz.size / 2, -pz.size / 2, pz.size, pz.size);
+    ctx.restore();
+  }
+  if (F.flipping) drawRamp(ctx, F.flipping, false);
+  for (const rp of F.ramps) {                           // espresso chevrons slide downhill
+    if (!rp.boost) continue;
+    const down = Math.sin(rp.ang) > 0 ? 1 : -1, len = rp.boost[1] - rp.boost[0];
+    ctx.strokeStyle = '#FFE8C2'; ctx.lineWidth = 1.8; ctx.lineCap = 'round';
+    for (let k = 0; k < 4; k++) {
+      const off = ((S.time * 60 + k * len / 4) % len);
+      const s = down > 0 ? rp.boost[0] + off : rp.boost[1] - off;
+      const [x, y] = rampPt(rp, s, T / 2 - 1);
+      const c = Math.cos(rp.ang) * down, sn = Math.sin(rp.ang) * down;
+      ctx.beginPath();
+      ctx.moveTo(x - c * 3 - sn * 2.5, y - sn * 3 + c * 2.5);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x - c * 3 + sn * 2.5, y - sn * 3 - c * 2.5);
+      ctx.stroke();
+    }
+  }
+  const D = F.door;
+  if (D.close > 0) {                                    // the door slams shut
+    const h = (D.bot - D.top + 6) * D.close;
+    ctx.fillStyle = '#B5562F';
+    roundRect(ctx, -2, D.top - 4, 26, h, 6); ctx.fill();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = INK; ctx.stroke();
+    ctx.strokeStyle = 'rgba(58,36,32,0.4)'; ctx.lineWidth = 1.5;
+    for (let y = D.top + 6; y < D.top - 4 + h - 3; y += 8) { ctx.beginPath(); ctx.moveTo(2, y); ctx.lineTo(20, y); ctx.stroke(); }
+  }
+}
+
+function drawRacer(b) {
+  const sp = getSprite(b.def, R), sh = getShadow();
+  ctx.save();
+  if (b.ghostT > 0) ctx.globalAlpha = 0.55;
+  ctx.drawImage(sh.canvas, b.x - sh.size / 2 + 3, b.y - sh.size / 2 + 5, sh.size, sh.size);
+  ctx.translate(b.x, b.y);
+  if (b.squash > 0.02) {
+    ctx.rotate(b.squashAng);
+    ctx.scale(1 - 0.3 * b.squash, 1 + 0.2 * b.squash);
+    ctx.rotate(-b.squashAng);
+  }
+  ctx.rotate(b.lean);
+  ctx.drawImage(sp.canvas, -sp.size / 2, -sp.size / 2, sp.size, sp.size);
+  ctx.restore();
+  if (b.frozenT > 0) {                                  // stopped in time: icy bubble + clock
+    circ(ctx, b.x, b.y, R + 3);
+    ctx.fillStyle = 'rgba(160,225,255,0.45)'; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = '#E8FAFF'; ctx.stroke();
+    seg(ctx, b.x, b.y - R - 10, b.x, b.y - R - 15, 1.5, INK);
+    circ(ctx, b.x, b.y - R - 12, 5); ctx.lineWidth = 1.5; ctx.strokeStyle = INK; ctx.stroke();
+  }
+  if (b.slowT > 0) {
+    circ(ctx, b.x, b.y, R + 4); ctx.lineWidth = 2.5; ctx.strokeStyle = 'rgba(168,121,214,0.8)'; ctx.stroke();
+  }
+}
+
+// An eliminated marble gets squashed flat into a clay pancake.
+function drawLoser(b) {
+  const t = clamp(b.outT / 0.35, 0, 1), sp = getSprite(b.def, R);
+  const sx = 1 + 0.9 * easeOut(t), sy = 1 - 0.78 * easeOut(t);
+  ctx.save();
+  ctx.translate(b.x, b.y + R * (1 - sy));
+  ctx.globalAlpha = b.outT > 1.1 ? clamp(1 - (b.outT - 1.1) / 0.4, 0, 1) : 1;
+  ctx.scale(sx, sy);
+  ctx.drawImage(sp.canvas, -sp.size / 2, -sp.size / 2, sp.size, sp.size);
+  ctx.restore();
+  if (b.outT < 1.2) {
+    ctx.save();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const pop = clamp(b.outT / 0.15, 0, 1);
+    ctx.translate(clamp(b.x, 60, 440), b.y - 30);
+    ctx.rotate(-0.12);
+    ctx.scale(0.5 + 0.5 * easeOutBack(pop), 0.5 + 0.5 * easeOutBack(pop));
+    ctx.font = `700 26px ${CLAY}`;
+    clayText(ctx, 'OUT!', 0, 0, '#FF4D4D', 3, 6);
+    ctx.restore();
+  }
+}
+
+function drawFloor(F, oy) {
+  ctx.save();
+  ctx.translate(0, L.trackTop + oy);
+  ctx.drawImage(F.canvas, 0, -FLOOR_PAD, LW, TH + FLOOR_PAD);
+  drawFloorLive(F);
+  ctx.restore();
+}
+
+function drawRacers() {
+  let lead = null, last = null;
+  if (S.phase === 'race') {
+    const order = standings();
+    if (order.length > 1) { lead = order[0]; last = order[order.length - 1]; }
+  }
+  for (const h of S.hazards) {                           // banana peels
+    ctx.save(); ctx.translate(h.x, h.y); ctx.rotate(0.3);
+    ell(ctx, 0, 0, 11, 5); ink(ctx, '#F7D44A', 1.5);
+    ell(ctx, -6, -3, 5, 3, -0.8); ink(ctx, '#F7D44A', 1.5);
+    ell(ctx, 6, -3, 5, 3, 0.8); ink(ctx, '#F7D44A', 1.5);
+    ctx.restore();
+  }
+  for (const b of S.racers) {                            // speed trails
+    if (b.trail.length < 2) continue;
+    for (let i = 0; i < b.trail.length; i++) {
+      ctx.globalAlpha = (i + 1) / b.trail.length * 0.35;
+      circ(ctx, b.trail[i][0], b.trail[i][1], R * (0.5 + 0.5 * (i + 1) / b.trail.length));
+      ctx.fillStyle = b.def.color; ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+  if (last && S.elim) {                                  // whoever is last right now: danger ring
+    circ(ctx, last.x, last.y, R + 5 + Math.sin(S.time * 10) * 1.5);
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(230,57,70,0.85)'; ctx.stroke();
+  }
+  const pen = S.phase === 'intro' || S.phase === 'shift';
+  for (const b of S.racers) {
+    if (b.state === 'race') drawRacer(b);
+    else if (b.state === 'pen' && pen) {
+      const bob = Math.sin(S.time * 7 + b.idx * 1.7) * 1.2;     // fidgeting in the box
+      b.squash = 0;
+      const y = b.y;
+      b.y += bob; drawRacer(b); b.y = y;
+    }
+  }
+  for (const b of S.losers) if (b.state === 'out' && b.outT < 1.6) drawLoser(b);
+  for (const bm of S.bombs) {                            // Bombardiro's bombs
+    ctx.save(); ctx.translate(bm.x, bm.y);
+    ell(ctx, 0, 0, 6, 9); ink(ctx, '#3B3B3B', 1.5);
+    ctx.fillStyle = '#B33A2A'; ctx.fillRect(-6, -10, 12, 3);
+    ctx.restore();
+  }
+  if (lead) drawCrown(lead.x, lead.y - R - 9);
+}
+
+function drawCrown(x, y) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.beginPath();
+  ctx.moveTo(-9, 4); ctx.lineTo(-9, -4); ctx.lineTo(-4.5, 0); ctx.lineTo(0, -6); ctx.lineTo(4.5, 0); ctx.lineTo(9, -4); ctx.lineTo(9, 4);
+  ctx.closePath();
+  ctx.fillStyle = '#FFD23F'; ctx.fill();
+  ctx.lineWidth = 1.8; ctx.lineJoin = 'round'; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.restore();
+}
+
+function drawFx() {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const f of S.fx) {
+    const t = 1 - f.life / f.max;      // 0 → 1 over the effect's life
+    if (f.kind === 'ring') {
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = f.color;
+      ctx.lineWidth = f.width * (1 - t) + 1;
+      ctx.beginPath(); ctx.arc(f.x, f.y, Math.max(0, f.r0 + (f.r1 - f.r0) * easeOut(t)), 0, TAU); ctx.stroke();
+    } else if (f.kind === 'spark') {
+      ctx.globalAlpha = 1 - t;
+      ctx.fillStyle = f.color;
+      circ(ctx, f.x, f.y, f.size); ctx.fill();
+    } else if (f.kind === 'puff') {
+      ctx.globalAlpha = (1 - t) * 0.9;
+      circ(ctx, f.x, f.y, f.size * (0.6 + t)); ctx.fillStyle = f.color; ctx.fill();
+      ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(58,36,32,0.35)'; ctx.stroke();
+    } else if (f.kind === 'confetti') {
+      ctx.globalAlpha = t < 0.85 ? 1 : (1 - t) / 0.15;
+      ctx.save(); ctx.translate(f.x, f.y); ctx.rotate(f.a);
+      ctx.fillStyle = f.color; ctx.fillRect(-f.size / 2, -f.size / 4, f.size, f.size / 2);
+      ctx.restore();
+    }
+  }
+  for (const f of S.fx) {
+    if (f.kind !== 'float') continue;
+    const t = 1 - f.life / f.max;
+    const pop = t < 0.12 ? 0.5 + 0.5 * easeOutBack(t / 0.12) : 1;
+    ctx.globalAlpha = t < 0.75 ? 1 : (1 - t) / 0.25;
+    const y = f.y - 30 * easeOut(t), x = clamp(f.x, 110, 390);
+    fitFont(ctx, f.text, 320, f.size * pop);
+    clayText(ctx, f.text, x, y, f.color, 2, 5);
+  }
+  ctx.restore();
+}
+
+// The 12 racers along the top: in the race, safe this floor, or OUT.
+function drawStrip() {
+  const n = S.racers.length, gap = (LW - 60) / (n - 1), r = 14;
+  for (const b of S.racers) {
+    const x = 30 + b.idx * gap, y = L.stripY;
+    const out = b.state === 'out' && !(S.losers.includes(b) && b.outT < 0.35);
+    const sp = getSprite(b.def, r, out);
+    ctx.drawImage(sp.canvas, x - sp.size / 2, y - sp.size / 2, sp.size, sp.size);
+    if (out) {
+      seg(ctx, x - 9, y - 9, x + 9, y + 9, 4, '#E63946');
+      seg(ctx, x + 9, y - 9, x - 9, y + 9, 4, '#E63946');
+    } else if (b === S.winner && (S.phase === 'win' || S.phase === 'end')) {
+      drawCrown(x, y - r - 5);
+    } else if (b.state === 'done' && S.phase === 'race') {
+      circ(ctx, x + 10, y + 10, 6); ink(ctx, '#3FB950', 1.5);
+      ctx.beginPath(); ctx.moveTo(x + 7, y + 10); ctx.lineTo(x + 9.5, y + 12.5); ctx.lineTo(x + 13.5, y + 7.5);
+      ctx.lineWidth = 1.8; ctx.strokeStyle = '#FFFFFF'; ctx.stroke();
+    }
+  }
+}
+
+// Round countdown (left pill) and floor counter (right pill).
+function drawHud() {
+  const secs = Math.max(0, Math.ceil(S.clock));
+  const text = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  const urgent = !S.timeUp && S.clock <= 10;
+  const pulse = urgent ? 1 + 0.12 * Math.pow(S.clock - Math.floor(S.clock), 3) : 1;
+  const pill = (x, color, w) => {
+    roundRect(ctx, x - w / 2, L.hudY - 18 + 4, w, 36, 18); ctx.fillStyle = INK; ctx.fill();
+    roundRect(ctx, x - w / 2, L.hudY - 18, w, 36, 18); ctx.fillStyle = color; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = INK; ctx.stroke();
+  };
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.save();
+  ctx.translate(66, 0); ctx.translate(0, L.hudY); ctx.scale(pulse, pulse); ctx.translate(0, -L.hudY);
+  pill(0, urgent || S.timeUp ? '#E63946' : '#F28C28', 96);
+  ctx.font = `700 24px ${CLAY}`;
+  clayText(ctx, text, 0, L.hudY + 1, CREAM, 2, 4);
+  ctx.restore();
+  const left = aliveRacers().length;
+  pill(474, '#4FA3E0', 104);
+  ctx.font = `700 15px ${CLAY}`;
+  const label = S.timeUp || S.phase === 'win' ? 'WINNER' : left === 2 ? 'FINAL' : `FLOOR ${S.heat}`;
+  clayText(ctx, label, 474, L.hudY - 6, CREAM, 1.5, 3.5);
+  ctx.font = `700 11px ${CLAY}`;
+  clayText(ctx, `${left} LEFT`, 474, L.hudY + 9, '#FFE27A', 1, 3);
+  ctx.restore();
+}
+
+// Clay plaque banners: floor name, TRACK FLIP, OUT!, WINNER!
+function drawBanner() {
+  const B = S.banner;
+  if (!B) return;
+  const age = B.max - B.life;
+  const fadeOut = Math.min(1, B.life / 0.35);
+  const pop = age < 0.2 ? 0.3 + 0.7 * easeOutBack(age / 0.2) : 1;
+  const style = {
+    floor: { color: '#FFE27A', w: 360, h: 92, y: 0.4 },
+    flip: { color: '#C9A3F0', w: 300, h: 78, y: 0.09 },
+    out: { color: '#FF8A8A', w: 420, h: 118, y: 0.42 },
+    win: { color: '#FFD23F', w: 440, h: B.face ? 140 : 110, y: 0.52 },
+  }[B.kind];
+  ctx.save();
+  ctx.globalAlpha = fadeOut;
+  ctx.translate(L.cx - 18, L.trackTop + TH * style.y);
+  ctx.scale(pop, pop);
+  const { w, h } = style;
+  roundRect(ctx, -w / 2, -h / 2 + 6, w, h, 26); ctx.fillStyle = INK; ctx.fill();
+  roundRect(ctx, -w / 2, -h / 2, w, h, 26); ctx.fillStyle = style.color; ctx.fill();
+  ctx.lineWidth = 4; ctx.strokeStyle = INK; ctx.stroke();
+  roundRect(ctx, -w / 2 + 8, -h / 2 + 6, w - 16, h * 0.32, 18);
+  ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.fill();
+
+  let tx = 0;
+  const faces = B.faces || (B.face ? [B.face] : []);
+  if (faces.length) {                                   // the racer(s) it's about
+    const fr = B.kind === 'win' ? 30 : 24;
+    faces.forEach((def, i) => {
+      const sp = getSprite(def, fr);
+      const fx = -w / 2 + 18 + fr + i * fr * 1.3;
+      ctx.drawImage(sp.canvas, fx - sp.size / 2, -sp.size / 2 + (i ? 8 : 0), sp.size, sp.size);
+    });
+    tx = (fr + 8 + (faces.length - 1) * fr * 0.65);
+  }
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const tw = w - 40 - tx * 1.2;
+  if (B.kind === 'win' && B.face) {                     // WINNER! small on top, the name big
+    fitFont(ctx, B.text, tw, 30);
+    clayText(ctx, B.text, tx * 0.6, -h * 0.24, '#FF8A1F', 3, 6);
+    fitFont(ctx, B.sub.toUpperCase(), tw, B.big ? 44 : 38);
+    clayText(ctx, B.sub.toUpperCase(), tx * 0.6, h * 0.14, '#FF6FA8', 4, 7);
+    ctx.restore();
+    return;
+  }
+  fitFont(ctx, B.text, tw, B.kind === 'win' ? 50 : B.kind === 'out' ? 48 : 40);
+  clayText(ctx, B.text, tx * 0.6, B.sub ? -h * 0.14 : 0, B.kind === 'out' ? '#FF4D4D' : B.kind === 'flip' ? '#FFFFFF' : '#FF8A1F', 4, 7);
+  if (B.sub) {
+    fitFont(ctx, B.sub, tw, 20);
+    ctx.fillStyle = INK;
+    ctx.fillText(B.sub, tx * 0.6, h * 0.25);
+  }
+  ctx.restore();
+}
+
+function draw() {
+  if (!canvas.width || !canvas.height || !backdrop.width) return;   // page not laid out yet
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(backdrop, 0, 0);
+  const sx = S.shake ? rand(-1, 1) * S.shake : 0, sy = S.shake ? rand(-1, 1) * S.shake : 0;
+  ctx.setTransform(scale, 0, 0, scale, sx * scale, sy * scale);
+
+  // The track (clipped to its area so sliding floors never cover the hook)
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, L.trackTop - FLOOR_PAD, LW, L.panelBottom - L.trackTop + FLOOR_PAD); ctx.clip();
+  if (S.phase === 'shift' && S.prevFloor) {
+    const p = easeInOut(clamp(S.phaseT / SHIFT_DUR, 0, 1)), off = (TH + FLOOR_PAD + 20) * p;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, L.stripY + 22, LW, L.panelBottom - L.stripY - 22); ctx.clip();
+    drawFloor(S.prevFloor, -off);
+    ctx.restore();
+    drawFloor(S.floor, TH + FLOOR_PAD + 20 - off);
+    ctx.save(); ctx.translate(0, L.trackTop + TH + FLOOR_PAD + 20 - off);
+    for (const b of aliveRacers()) drawRacer(b);
+    ctx.restore();
+  } else {
+    drawFloor(S.floor, 0);
+    ctx.save(); ctx.translate(0, L.trackTop);
+    drawRacers();
+    drawFx();
+    if (S.phase === 'win' || S.phase === 'end') drawChampion();
+    ctx.restore();
+  }
+  ctx.restore();
+
+  drawStrip();
+  drawHud();
+  if (S.flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${S.flash})`;
+    ctx.fillRect(-20, -20, LW + 40, LH + 40);
+  }
+  drawBanner();
+
+  // Black bands (drawn last, unshaken, so nothing spills into TikTok's UI zones)
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, LW, L.panelTop);
+  ctx.fillRect(0, L.panelBottom, LW, LH - L.panelBottom);
+}
+
+// The winner, big, spinning in a spotlight above the WINNER plaque.
+function drawChampion() {
+  const w = S.winner;
+  if (!w) return;
+  const age = S.phase === 'win' ? S.phaseT : 1;
+  const k = easeOutBack(clamp(age / 0.5, 0, 1));
+  const r = 52, sp = getSprite(w.def, r);
+  const x = TCX, y = TH * 0.23;
+  ctx.save();
+  ctx.globalAlpha = 0.5 * k;
+  const gl = ctx.createRadialGradient(x, y, 0, x, y, 110);
+  gl.addColorStop(0, '#FFF6C8'); gl.addColorStop(1, 'rgba(255,246,200,0)');
+  ctx.fillStyle = gl; circ(ctx, x, y, 110); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.translate(x, y + Math.sin(S.time * 3) * 4);
+  ctx.rotate(Math.sin(S.time * 2) * 0.12);
+  ctx.scale(k, k);
+  ctx.drawImage(sp.canvas, -sp.size / 2, -sp.size / 2, sp.size, sp.size);
+  ctx.restore();
+  if (k > 0.5) drawCrownBig(x, y - r - 16 + Math.sin(S.time * 3) * 4);
+}
+function drawCrownBig(x, y) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(2.2, 2.2);
+  ctx.translate(-x, -y); drawCrown(x, y);
+  ctx.restore();
+}
+
+/* =====================================================================
+   VIDEO RECORDING
+   Records one full round straight from the canvas (1080×1920, 60fps, with
+   sound), keeps going a few seconds into the freeze, then saves the file.
+   ===================================================================== */
+
+const params = new URLSearchParams(location.search);
+// ?upload=/path  → POST the finished video to this same-origin path instead of
+// downloading it (used by tools/render.py). ?autorecord → start on load.
+const UPLOAD_PATH = /^\/(?!\/)/.test(params.get('upload') || '') ? params.get('upload') : null;
+
+const Recorder = {
+  on: false, rec: null, chunks: [], tail: 0, startedAt: 0, frames: 0,
+  TAIL_SECONDS: 3.5,        // how long to keep filming the frozen end screen
+
+  // Best format this browser can record: MP4 (H.264/AAC) first, WebM fallback.
+  pickMime() {
+    const types = [
+      'video/mp4;codecs=avc1.64002A,mp4a.40.2',
+      'video/mp4;codecs=avc1,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+    return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  },
+
+  start() {
+    if (this.on) return;
+    if (!window.MediaRecorder || !canvas.captureStream) {
+      alert("This browser can't record video. Try Chrome or Safari on a computer.");
+      return;
+    }
+    Sound.unlock();
+    this.on = true;
+    resize();                 // lock the canvas to 1080×1920
+    startRound();
+    draw();
+
+    const stream = canvas.captureStream(60);
+    const audio = Sound.recordStream();
+    if (audio) audio.getAudioTracks().forEach(t => stream.addTrack(t));
+
+    const mimeType = this.pickMime();
+    const opts = { videoBitsPerSecond: 8_000_000, audioBitsPerSecond: 192_000 };
+    if (mimeType) opts.mimeType = mimeType;
+    this.rec = new MediaRecorder(stream, opts);
+    this.chunks = [];
+    this.rec.ondataavailable = e => { if (e.data.size) this.chunks.push(e.data); };
+    this.rec.onstop = () => this.save();
+    this.rec.start(1000);
+
+    this.tail = this.TAIL_SECONDS;
+    this.startedAt = performance.now();
+    this.frames = 0;
+    $('recBtn').classList.add('on');
+    $('recBtn').textContent = '⏹';
+    $('recBadge').hidden = false;
+  },
+
+  // Called every frame once the round is over: film the freeze, then stop.
+  tick(rdt) {
+    if (!this.rec) return;
+    this.tail -= rdt;
+    if (this.tail <= 0) this.stop();
+  },
+
+  stop() {
+    if (this.rec && this.rec.state !== 'inactive') this.rec.stop();
+  },
+
+  save() {
+    const type = this.rec.mimeType || 'video/webm';
+    const blob = new Blob(this.chunks, { type });
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const name = `brainrot-race-${stamp}.${ext}`;
+    const secs = (performance.now() - this.startedAt) / 1000;
+    const fps = (this.frames / secs).toFixed(1);
+
+    this.rec = null;
+    this.chunks = [];
+    this.on = false;
+    resize();                 // back to the normal screen layout
+    $('recBtn').classList.remove('on');
+    $('recBtn').textContent = '⏺';
+    $('recBadge').hidden = true;
+
+    if (UPLOAD_PATH) {
+      fetch(`${UPLOAD_PATH}?name=${encodeURIComponent(name)}&fps=${fps}`, { method: 'POST', body: blob });
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  },
+
+  // On-screen REC badge with elapsed time.
+  frame() {
+    if (!this.on) return;
+    this.frames++;
+    const s = Math.floor((performance.now() - this.startedAt) / 1000);
+    const text = `● REC ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    const badge = $('recBadge');
+    if (badge.textContent !== text) badge.textContent = text;
+  },
+};
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+
+$('recBtn').addEventListener('click', () => (Recorder.on ? Recorder.stop() : Recorder.start()));
+
+// Tap a marble during the race to make it use its special move
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (S.phase !== 'race' || S.timeUp) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width * LW;
+  const y = (e.clientY - rect.top) / rect.height * LH - L.trackTop;
+  const b = racing().find(o => (o.x - x) ** 2 + (o.y - y) ** 2 < (R * 2.2) ** 2);
+  if (b) useAbility(b);
+});
+
+// Audio starts on load if the browser allows it. If it's blocked, any touch,
+// click or key press starts it (different browsers count different events).
+for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) {
+  window.addEventListener(ev, () => Sound.unlock(), { capture: true });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Sound.unlock(); });
+
+const muteBtn = $('muteBtn');
+function toggleMute() {
+  Sound.setMuted(!Sound.muted);
+  muteBtn.textContent = Sound.muted ? '🔇' : '🔊';
+}
+muteBtn.addEventListener('click', toggleMute);
+
+const panel = $('panel');
+$('setBtn').addEventListener('click', () => { panel.hidden = !panel.hidden; });
+$('closeBtn').addEventListener('click', () => { panel.hidden = true; });
+$('resetBtn').addEventListener('click', () => { startRound(); panel.hidden = true; });
+
+// Bind a slider to a Settings key with a formatted readout
+function bindSlider(inputId, labelId, key, fmtVal) {
+  const input = $(inputId), label = $(labelId);
+  input.value = Settings[key];
+  label.textContent = fmtVal(Settings[key]);
+  input.addEventListener('input', () => {
+    Settings[key] = parseFloat(input.value);
+    label.textContent = fmtVal(Settings[key]);
+  });
+}
+bindSlider('inGrav', 'vGrav', 'gravity', v => String(Math.round(v)));
+bindSlider('inBounce', 'vBounce', 'bounce', v => v.toFixed(2));
+bindSlider('inMoves', 'vMoves', 'moves', v => (v ? v.toFixed(1) + '×' : 'off'));
+
+// Keyboard shortcuts for desktop recording: M = mute, R = restart the round
+window.addEventListener('keydown', e => {
+  if (e.key === 'm' || e.key === 'M') toggleMute();
+  if (e.key === 'r' || e.key === 'R') startRound();
+});
+
+window.addEventListener('resize', resize);
+
+/* =====================================================================
+   MAIN LOOP
+   ===================================================================== */
+
+resize();
+startRound();
+Sound.unlock();     // try to start sound right away
+if (params.has('autorecord')) Recorder.start();
+
+let lastT = performance.now();
+function frame(now) {
+  // Never negative (the first rAF timestamp can be earlier than lastT), capped after tab switches
+  const rdt = clamp((now - lastT) / 1000, 0, 1 / 20);
+  lastT = now;
+  try {
+    update(rdt);
+    draw();
+  } catch (err) {
+    console.error(err);     // log it (render.py prints these) but keep the loop alive
+  }
+  Recorder.frame();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

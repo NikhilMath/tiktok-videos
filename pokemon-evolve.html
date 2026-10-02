@@ -19,16 +19,19 @@
   #stage { position: relative; --u: 1px; }
   canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 
-  /* ---------- Corner counter ---------- */
-  #stats {
-    position: absolute;
-    left: calc(var(--u) * 14);
-    top: calc(env(safe-area-inset-top, 0px) + var(--u) * 12);
-    font: 800 calc(var(--u) * 13) / 1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    color: #fff; letter-spacing: 0.06em; pointer-events: none;
-    text-shadow: 0 0 calc(var(--u) * 6) rgba(255, 255, 255, 0.6);
+  /* Reads the notch height so canvas text can stay clear of it */
+  #safeProbe { position: absolute; visibility: hidden; padding-top: env(safe-area-inset-top, 0px); }
+
+  /* ---------- Recording indicator (on screen only, not in the video) ---------- */
+  #recBadge {
+    position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + var(--u) * 14);
+    transform: translateX(-50%); padding: calc(var(--u) * 6) calc(var(--u) * 14);
+    border-radius: 999px; background: rgba(255, 30, 60, 0.9); color: #fff;
+    font: 800 calc(var(--u) * 14) system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: 0.08em; pointer-events: none;
   }
-  #stats b { color: #FFD54A; text-shadow: 0 0 calc(var(--u) * 8) #FFB300; }
+  #recBadge[hidden] { display: none; }
+  #recBtn.on { border-color: #FF3B5C; box-shadow: 0 0 calc(var(--u) * 14) #FF3B5C; }
 
   /* ---------- Buttons (mute / settings) ---------- */
   #btns {
@@ -61,9 +64,10 @@
   .row { display: flex; gap: calc(var(--u) * 10); margin-top: calc(var(--u) * 6); }
   .row button {
     flex: 1; padding: calc(var(--u) * 10); border-radius: calc(var(--u) * 10); cursor: pointer;
-    font: 800 calc(var(--u) * 15) system-ui, sans-serif; color: #fff; background: transparent;
+    font: 800 calc(var(--u) * 14) system-ui, sans-serif; color: #fff; background: transparent;
   }
   #resetBtn { border: 2px solid #FF4D6D; box-shadow: 0 0 calc(var(--u) * 10) rgba(255, 77, 109, 0.6); }
+  #clearBtn { border: 2px solid #FFD54A; box-shadow: 0 0 calc(var(--u) * 10) rgba(255, 213, 74, 0.6); }
   #closeBtn { border: 2px solid #4D9DFF; box-shadow: 0 0 calc(var(--u) * 10) rgba(77, 157, 255, 0.6); }
 </style>
 </head>
@@ -71,13 +75,11 @@
 <div id="stage">
   <canvas id="c"></canvas>
 
-  <div id="stats">
-    <div>EVOLUTIONS <b id="sEvo">0</b></div>
-    <div>FINAL FORMS <b id="sFinal">0</b></div>
-    <div>MEGAS <b id="sMega">0</b></div>
-  </div>
+  <div id="safeProbe"></div>
+  <div id="recBadge" hidden>● REC 0:00</div>
 
   <div id="btns">
+    <button class="iconBtn" id="recBtn" aria-label="Record a video">⏺</button>
     <button class="iconBtn" id="muteBtn" aria-label="Toggle sound">🔊</button>
     <button class="iconBtn" id="setBtn" aria-label="Settings">⚙️</button>
   </div>
@@ -95,6 +97,7 @@
     </label>
     <div class="row">
       <button id="resetBtn">RESET</button>
+      <button id="clearBtn">CLEAR RECORD</button>
       <button id="closeBtn">CLOSE</button>
     </div>
   </div>
@@ -113,63 +116,113 @@ const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sa
 const TYPE_COLORS = {
   Fire: '#FF6B35', Water: '#4D9DFF', Grass: '#4CD964', Electric: '#FFD60A',
   Psychic: '#FF4DA6', Dragon: '#7B61FF', Ghost: '#9B59B6',
+  Normal: '#E6E1C8', Bug: '#B4E61D', Poison: '#C86BFF', Ground: '#E8B85C',
+  Fairy: '#FF9BE0', Fighting: '#FF3B3B', Rock: '#C9A66B', Ice: '#7FF5FF',
 };
 
-// Physics radius (logical units) per evolution stage. Stage 4 = Mega.
-const STAGE_RADIUS = { 1: 22, 2: 31, 3: 42, 4: 56 };
-
-/* Every Pokémon is one config object.
-   - next:     id this evolves into when two of the same touch (null = never)
-   - imageUrl: optional sprite URL; if set, it is drawn clipped inside the orb
-               instead of the name text (must allow CORS or be same-origin).
-   - color:    optional override; defaults to the type color. */
-const POKEMON = [
-  { id: 'charmander',  name: 'Charmander',     type: 'Fire',     stage: 1, next: 'charmeleon',    imageUrl: null },
-  { id: 'charmeleon',  name: 'Charmeleon',     type: 'Fire',     stage: 2, next: 'charizard',     imageUrl: null },
-  { id: 'charizard',   name: 'Charizard',      type: 'Fire',     stage: 3, next: 'mega-charizard', imageUrl: null },
-  { id: 'mega-charizard', name: 'MEGA Charizard', type: 'Fire',  stage: 4, next: null, mega: true, imageUrl: null },
-
-  { id: 'squirtle',    name: 'Squirtle',       type: 'Water',    stage: 1, next: 'wartortle',     imageUrl: null },
-  { id: 'wartortle',   name: 'Wartortle',      type: 'Water',    stage: 2, next: 'blastoise',     imageUrl: null },
-  { id: 'blastoise',   name: 'Blastoise',      type: 'Water',    stage: 3, next: 'mega-blastoise', imageUrl: null },
-  { id: 'mega-blastoise', name: 'MEGA Blastoise', type: 'Water', stage: 4, next: null, mega: true, imageUrl: null },
-
-  { id: 'bulbasaur',   name: 'Bulbasaur',      type: 'Grass',    stage: 1, next: 'ivysaur',       imageUrl: null },
-  { id: 'ivysaur',     name: 'Ivysaur',        type: 'Grass',    stage: 2, next: 'venusaur',      imageUrl: null },
-  { id: 'venusaur',    name: 'Venusaur',       type: 'Grass',    stage: 3, next: 'mega-venusaur', imageUrl: null },
-  { id: 'mega-venusaur', name: 'MEGA Venusaur', type: 'Grass',   stage: 4, next: null, mega: true, imageUrl: null },
-
-  { id: 'pichu',       name: 'Pichu',          type: 'Electric', stage: 1, next: 'pikachu',       imageUrl: null },
-  { id: 'pikachu',     name: 'Pikachu',        type: 'Electric', stage: 2, next: 'raichu',        imageUrl: null },
-  { id: 'raichu',      name: 'Raichu',         type: 'Electric', stage: 3, next: 'mega-raichu',   imageUrl: null },
-  { id: 'mega-raichu', name: 'MEGA Raichu',    type: 'Electric', stage: 4, next: null, mega: true, imageUrl: null },
-
-  { id: 'gastly',      name: 'Gastly',         type: 'Ghost',    stage: 1, next: 'haunter',       imageUrl: null },
-  { id: 'haunter',     name: 'Haunter',        type: 'Ghost',    stage: 2, next: 'gengar',        imageUrl: null },
-  { id: 'gengar',      name: 'Gengar',         type: 'Ghost',    stage: 3, next: 'mega-gengar',   imageUrl: null },
-  { id: 'mega-gengar', name: 'MEGA Gengar',    type: 'Ghost',    stage: 4, next: null, mega: true, imageUrl: null },
-
-  { id: 'dratini',     name: 'Dratini',        type: 'Dragon',   stage: 1, next: 'dragonair',     imageUrl: null },
-  { id: 'dragonair',   name: 'Dragonair',      type: 'Dragon',   stage: 2, next: 'dragonite',     imageUrl: null },
-  { id: 'dragonite',   name: 'Dragonite',      type: 'Dragon',   stage: 3, next: 'mega-dragonite', imageUrl: null },
-  { id: 'mega-dragonite', name: 'MEGA Dragonite', type: 'Dragon', stage: 4, next: null, mega: true, imageUrl: null },
+/* ONE straight evolution line, in National Pokédex order.
+   Two of the same Pokémon merge into the NEXT entry in this list:
+   Bulbasaur → Ivysaur → Venusaur → Charmander → … → Mew.
+   Format: [name, primary type, isFinalForm, optional imageUrl]
+   isFinalForm = fully evolved species (triggers the golden FINAL FORM! burst). */
+const CHAIN = [
+  ['Bulbasaur', 'Grass'], ['Ivysaur', 'Grass'], ['Venusaur', 'Grass', 1],
+  ['Charmander', 'Fire'], ['Charmeleon', 'Fire'], ['Charizard', 'Fire', 1],
+  ['Squirtle', 'Water'], ['Wartortle', 'Water'], ['Blastoise', 'Water', 1],
+  ['Caterpie', 'Bug'], ['Metapod', 'Bug'], ['Butterfree', 'Bug', 1],
+  ['Weedle', 'Bug'], ['Kakuna', 'Bug'], ['Beedrill', 'Bug', 1],
+  ['Pidgey', 'Normal'], ['Pidgeotto', 'Normal'], ['Pidgeot', 'Normal', 1],
+  ['Rattata', 'Normal'], ['Raticate', 'Normal', 1],
+  ['Spearow', 'Normal'], ['Fearow', 'Normal', 1],
+  ['Ekans', 'Poison'], ['Arbok', 'Poison', 1],
+  ['Pikachu', 'Electric'], ['Raichu', 'Electric', 1],
+  ['Sandshrew', 'Ground'], ['Sandslash', 'Ground', 1],
+  ['Nidoran♀', 'Poison'], ['Nidorina', 'Poison'], ['Nidoqueen', 'Poison', 1],
+  ['Nidoran♂', 'Poison'], ['Nidorino', 'Poison'], ['Nidoking', 'Poison', 1],
+  ['Clefairy', 'Fairy'], ['Clefable', 'Fairy', 1],
+  ['Vulpix', 'Fire'], ['Ninetales', 'Fire', 1],
+  ['Jigglypuff', 'Normal'], ['Wigglytuff', 'Normal', 1],
+  ['Zubat', 'Poison'], ['Golbat', 'Poison'],
+  ['Oddish', 'Grass'], ['Gloom', 'Grass'], ['Vileplume', 'Grass', 1],
+  ['Paras', 'Bug'], ['Parasect', 'Bug', 1],
+  ['Venonat', 'Bug'], ['Venomoth', 'Bug', 1],
+  ['Diglett', 'Ground'], ['Dugtrio', 'Ground', 1],
+  ['Meowth', 'Normal'], ['Persian', 'Normal', 1],
+  ['Psyduck', 'Water'], ['Golduck', 'Water', 1],
+  ['Mankey', 'Fighting'], ['Primeape', 'Fighting'],
+  ['Growlithe', 'Fire'], ['Arcanine', 'Fire', 1],
+  ['Poliwag', 'Water'], ['Poliwhirl', 'Water'], ['Poliwrath', 'Water', 1],
+  ['Abra', 'Psychic'], ['Kadabra', 'Psychic'], ['Alakazam', 'Psychic', 1],
+  ['Machop', 'Fighting'], ['Machoke', 'Fighting'], ['Machamp', 'Fighting', 1],
+  ['Bellsprout', 'Grass'], ['Weepinbell', 'Grass'], ['Victreebel', 'Grass', 1],
+  ['Tentacool', 'Water'], ['Tentacruel', 'Water', 1],
+  ['Geodude', 'Rock'], ['Graveler', 'Rock'], ['Golem', 'Rock', 1],
+  ['Ponyta', 'Fire'], ['Rapidash', 'Fire', 1],
+  ['Slowpoke', 'Water'], ['Slowbro', 'Water', 1],
+  ['Magnemite', 'Electric'], ['Magneton', 'Electric'],
+  ["Farfetch'd", 'Normal', 1],
+  ['Doduo', 'Normal'], ['Dodrio', 'Normal', 1],
+  ['Seel', 'Water'], ['Dewgong', 'Water', 1],
+  ['Grimer', 'Poison'], ['Muk', 'Poison', 1],
+  ['Shellder', 'Water'], ['Cloyster', 'Water', 1],
+  ['Gastly', 'Ghost'], ['Haunter', 'Ghost'], ['Gengar', 'Ghost', 1],
+  ['Onix', 'Rock'],
+  ['Drowzee', 'Psychic'], ['Hypno', 'Psychic', 1],
+  ['Krabby', 'Water'], ['Kingler', 'Water', 1],
+  ['Voltorb', 'Electric'], ['Electrode', 'Electric', 1],
+  ['Exeggcute', 'Grass'], ['Exeggutor', 'Grass', 1],
+  ['Cubone', 'Ground'], ['Marowak', 'Ground', 1],
+  ['Hitmonlee', 'Fighting', 1], ['Hitmonchan', 'Fighting', 1],
+  ['Lickitung', 'Normal'],
+  ['Koffing', 'Poison'], ['Weezing', 'Poison', 1],
+  ['Rhyhorn', 'Ground'], ['Rhydon', 'Ground'],
+  ['Chansey', 'Normal'], ['Tangela', 'Grass'], ['Kangaskhan', 'Normal', 1],
+  ['Horsea', 'Water'], ['Seadra', 'Water'],
+  ['Goldeen', 'Water'], ['Seaking', 'Water', 1],
+  ['Staryu', 'Water'], ['Starmie', 'Water', 1],
+  ['Mr. Mime', 'Psychic', 1], ['Scyther', 'Bug'], ['Jynx', 'Ice', 1],
+  ['Electabuzz', 'Electric'], ['Magmar', 'Fire'], ['Pinsir', 'Bug', 1], ['Tauros', 'Normal', 1],
+  ['Magikarp', 'Water'], ['Gyarados', 'Water', 1],
+  ['Lapras', 'Water', 1], ['Ditto', 'Normal', 1],
+  ['Eevee', 'Normal'], ['Vaporeon', 'Water', 1], ['Jolteon', 'Electric', 1], ['Flareon', 'Fire', 1],
+  ['Porygon', 'Normal'],
+  ['Omanyte', 'Rock'], ['Omastar', 'Rock', 1],
+  ['Kabuto', 'Rock'], ['Kabutops', 'Rock', 1],
+  ['Aerodactyl', 'Rock', 1], ['Snorlax', 'Normal', 1],
+  ['Articuno', 'Ice', 1], ['Zapdos', 'Electric', 1], ['Moltres', 'Fire', 1],
+  ['Dratini', 'Dragon'], ['Dragonair', 'Dragon'], ['Dragonite', 'Dragon', 1],
+  ['Mewtwo', 'Psychic', 1], ['Mew', 'Psychic', 1],
 ];
 
-// Lookup table with derived fields (color, radius, loaded image).
-const DEX = {};
-for (const p of POKEMON) {
-  DEX[p.id] = { ...p, color: p.color || TYPE_COLORS[p.type], r: STAGE_RADIUS[p.stage], img: null };
-}
-const STARTERS = Object.values(DEX).filter(p => p.stage === 1);
+/* Optional: set to a function (dex number → URL) to draw sprite images
+   inside every orb instead of the name, e.g.
+   const SPRITE_URL = n => `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${n}.png`;
+   A per-Pokémon imageUrl in CHAIN (4th field) takes priority. */
+const SPRITE_URL = null;
 
-// Load optional sprite images; invalidate the cached orb once each arrives.
-for (const def of Object.values(DEX)) {
-  if (!def.imageUrl) continue;
-  const img = new Image();
-  img.crossOrigin = 'anonymous';
-  img.onload = () => { def.img = img; sprites.delete(def.id); };
-  img.src = def.imageUrl;
-}
+// Orb radius grows with every step up the chain (capped so late tiers still fit).
+const radiusForTier = tier => Math.min(20 + 4.5 * (tier - 1), 100);
+
+// Big celebration (banner + slow-mo) when a NEW all-time record is at least this far up.
+const RECORD_MIN_TIER = 6;
+
+// Length of one round. When the clock hits 0:00 everything freezes in place.
+const ROUND_SECONDS = 120;   // 2:00
+
+// Expand the table into one config object per Pokémon.
+const TIERS = CHAIN.map(([name, type, final, imageUrl], i) => ({
+  tier: i + 1,                       // also its National Pokédex number
+  num: '#' + String(i + 1).padStart(3, '0'),
+  id: name.toLowerCase(),
+  name, type,
+  final: !!final,
+  color: TYPE_COLORS[type],
+  r: radiusForTier(i + 1),
+  next: i + 1 < CHAIN.length ? i + 1 : null,   // index of the next tier (null = end of the line)
+  imageUrl: imageUrl || (SPRITE_URL ? SPRITE_URL(i + 1) : null),
+  img: null, imgRequested: false,
+}));
+const START = TIERS[0];              // only Bulbasaur ever spawns
 
 // User-tweakable settings (bound to the sliders).
 const Settings = { spawnInterval: 0.8, gravity: 900, bounce: 0.72 };
@@ -190,18 +243,25 @@ const L = {};     // arena layout
 function layout() {
   L.cx = LW / 2;
   L.R = 240;                          // inner radius of the ring (collision surface)
-  L.cy = LH / 2 + 60;
+  L.cy = LH / 2 + 75;
   L.hw = 30;                          // half-width of the chute
   L.chuteTop = L.cy - L.R - 105;
   L.gapY = L.cy - Math.sqrt(L.R * L.R - L.hw * L.hw);  // where the chute meets the ring
   L.title1 = L.chuteTop - 100;
   L.title2 = L.chuteTop - 52;
+  L.timerY = L.title1 - 60;           // round countdown above the title
+  L.ladderY = L.cy + L.R + 92;        // Pokédex progress strip under the ring
 }
+
+const VIDEO_W = 1080;   // recorded video is 1080×1920 (TikTok's native size)
+let safeTop = 0;        // notch height in logical units
 
 function resize() {
   const ww = window.innerWidth, wh = window.innerHeight;
   let cssW, cssH;
-  if (wh / ww >= 16 / 9) {            // tall phone: fill the whole screen
+  if (Recorder.on) {                  // recording: exact 9:16 frame, fitted to the window
+    cssH = Math.min(wh, ww * 16 / 9); cssW = cssH * 9 / 16; LH = 960;
+  } else if (wh / ww >= 16 / 9) {     // tall phone: fill the whole screen
     cssW = ww; cssH = wh; LH = LW * wh / ww;
   } else {                            // wider screen: 9:16 box, letterboxed in black
     cssH = wh; cssW = wh * 9 / 16; LH = 960;
@@ -211,9 +271,12 @@ function resize() {
   stage.style.setProperty('--u', (cssW / LW) + 'px');
 
   const dpr = Math.min(window.devicePixelRatio || 1, 2);   // cap for phone performance
-  scale = (cssW / LW) * dpr;
+  scale = Recorder.on ? VIDEO_W / LW : (cssW / LW) * dpr;
   canvas.width = Math.round(LW * scale);
   canvas.height = Math.round(LH * scale);
+
+  const notch = parseFloat(getComputedStyle(document.getElementById('safeProbe')).paddingTop) || 0;
+  safeTop = Recorder.on ? 0 : notch / (cssW / LW);
 
   // Keep existing balls in place relative to the arena.
   const oldCy = L.cy;
@@ -253,6 +316,14 @@ function fitFont(g, text, maxW, maxSize, weight) {
   return size;
 }
 
+// All-time record survives reloads (silently skipped if storage is blocked).
+function loadRecord() {
+  try { return parseInt(localStorage.getItem('pokeChainRecord'), 10) || 0; } catch { return 0; }
+}
+function saveRecord(v) {
+  try { localStorage.setItem('pokeChainRecord', String(v)); } catch {}
+}
+
 /* =====================================================================
    SOUND (Web Audio, synthesized)
    ===================================================================== */
@@ -261,29 +332,48 @@ function fitFont(g, text, maxW, maxSize, weight) {
 const PENTA = [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5, 1174.66, 1318.51, 1567.98, 1760.0];
 
 const Sound = {
-  ctx: null, out: null, muted: false, lastBlip: 0,
+  ctx: null, out: null, comp: null, speaker: null, recDest: null, muted: false, lastBlip: 0,
 
-  // Must be called from a user gesture (autoplay rules).
+  // Called on page load (starts immediately where the browser allows autoplay)
+  // and again on every interaction, so audio starts the moment it's permitted.
+  // Graph: notes → out → compressor → speaker (mute switch) → speakers
+  //                                 ↘ recDest (video recording, ignores mute)
   unlock() {
     if (!this.ctx) {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return;
       this.ctx = new AC();
-      const comp = this.ctx.createDynamicsCompressor();
+      this.comp = this.ctx.createDynamicsCompressor();
       this.out = this.ctx.createGain();
-      this.out.gain.value = this.muted ? 0 : 0.6;
-      this.out.connect(comp);
-      comp.connect(this.ctx.destination);
+      this.out.gain.value = 0.6;
+      this.speaker = this.ctx.createGain();
+      this.speaker.gain.value = this.muted ? 0 : 1;
+      this.out.connect(this.comp);
+      this.comp.connect(this.speaker);
+      this.speaker.connect(this.ctx.destination);
     }
-    if (this.ctx.state === 'suspended') this.ctx.resume();
+    // 'suspended' = blocked by autoplay rules; 'interrupted' = iOS paused it (e.g. a call)
+    if (this.ctx.state !== 'running' && this.ctx.state !== 'closed') this.ctx.resume().catch(() => {});
   },
+
+  // Audio stream for the video recorder (sound is recorded even when muted).
+  recordStream() {
+    if (!this.ctx || !this.ctx.createMediaStreamDestination) return null;
+    if (!this.recDest) {
+      this.recDest = this.ctx.createMediaStreamDestination();
+      this.comp.connect(this.recDest);
+    }
+    return this.recDest.stream;
+  },
+
+  get running() { return !!this.ctx && this.ctx.state === 'running'; },
 
   setMuted(m) {
     this.muted = m;
-    if (this.out) this.out.gain.setTargetAtTime(m ? 0 : 0.6, this.ctx.currentTime, 0.02);
+    if (this.speaker) this.speaker.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.02);
   },
 
-  get ready() { return this.ctx && !this.muted && this.ctx.state === 'running'; },
+  get ready() { return this.running && (!this.muted || Recorder.on); },
 
   // One enveloped oscillator note.
   note(freq, when, dur, type = 'sine', vol = 0.2, attack = 0.005) {
@@ -308,10 +398,10 @@ const Sound = {
     this.note(PENTA[idx], 0, 0.22, 'triangle', 0.03 + 0.09 * strength);
   },
 
-  // Rising chime; higher stages start higher.
-  evolve(stage) {
+  // Rising chime; climbs in pitch as you go further up the chain.
+  evolve(tier) {
     if (!this.ready) return;
-    const base = stage >= 3 ? 4 : 2;
+    const base = (tier - 2) % 6;
     [0, 2, 4].forEach((k, i) => {
       const f = PENTA[Math.min(base + k, PENTA.length - 1)];
       this.note(f, i * 0.06, 0.35, 'sine', 0.16);
@@ -332,7 +422,7 @@ const Sound = {
     [1046.5, 1318.51, 1567.98, 2093.0].forEach((f, i) => this.note(f, 0.25 + i * 0.07, 0.4, 'sine', 0.05));
   },
 
-  mega() {
+  record() {
     if (!this.ready) return;
     // Low boom sweep
     const c = this.ctx, t = c.currentTime;
@@ -351,6 +441,19 @@ const Sound = {
     if (!this.ready) return;
     [880, 698.46, 554.37, 440].forEach((f, i) => this.note(f, i * 0.12, 0.25, 'square', 0.05));
   },
+
+  // Countdown tick for the last few seconds
+  tick() {
+    if (!this.ready) return;
+    this.note(1760, 0, 0.08, 'square', 0.04);
+  },
+
+  // Bell when the round ends
+  timeUp() {
+    if (!this.ready) return;
+    this.chord([523.25, 659.25, 783.99, 1046.5], 2.2, 0.1, 0.0);
+    [1567.98, 1318.51, 1046.5].forEach((f, i) => this.note(f, i * 0.18, 1.2, 'sine', 0.08));
+  },
 };
 
 /* =====================================================================
@@ -364,9 +467,13 @@ const S = {
   spawnT: 0,          // sim seconds until the next chute spawn
   overflowT: 0,       // sim seconds the chute has been blocked
   resetT: 0,          // real seconds until auto-reset after OVERFLOW
+  clock: ROUND_SECONDS,   // real seconds left in the round
+  lastTick: 0,        // last whole second we ticked on
+  timeUp: false,      // round over: simulation frozen
   time: 0, acc: 0,
-  evolutions: 0, finals: 0, megas: 0,
-  tapped: false,
+  evolutions: 0, finals: 0,
+  highest: 1,         // furthest tier reached this run
+  record: loadRecord(),   // furthest tier ever reached (persists)
 };
 
 let nextBallId = 1;
@@ -379,26 +486,34 @@ function resetSim() {
   S.balls.length = 0; S.pending.length = 0; S.fx.length = 0;
   S.flash = 0; S.banner = null; S.slowmo = 0;
   S.spawnT = 0.3; S.overflowT = 0; S.resetT = 0;
-  S.evolutions = S.finals = S.megas = 0;
+}
+
+// Fresh round: clear the arena, counters and clock.
+// (An OVERFLOW only clears the arena; the clock and round stats carry on.)
+function startRound() {
+  resetSim();
+  S.evolutions = S.finals = 0;
+  S.highest = 1;
+  S.clock = Number(params.get('seconds')) || ROUND_SECONDS;   // ?seconds=10 for quick tests
+  S.lastTick = 0;
+  S.timeUp = false;
 }
 
 function overlapsAny(x, y, r) {
   return S.balls.some(b => (b.x - x) ** 2 + (b.y - y) ** 2 < (b.r + r) ** 2);
 }
 
-// Drop a random stage-1 Pokémon into the top of the chute.
+// Drop a Bulbasaur into the top of the chute.
 function spawnFromChute() {
-  const def = pick(STARTERS);
-  const x = L.cx + rand(-1, 1) * (L.hw - def.r - 1);
-  const y = L.chuteTop + def.r + 2;
-  if (overlapsAny(x, y, def.r)) return;            // chute is clogged
-  S.balls.push(makeBall(def, x, y, rand(-40, 40), rand(20, 80)));
+  const x = L.cx + rand(-1, 1) * (L.hw - START.r - 1);
+  const y = L.chuteTop + START.r + 2;
+  if (overlapsAny(x, y, START.r)) return;            // chute is clogged
+  S.balls.push(makeBall(START, x, y, rand(-40, 40), rand(20, 80)));
 }
 
-// Drop a random stage-1 Pokémon wherever the user tapped.
+// Drop a Bulbasaur wherever the user tapped.
 function spawnAt(x, y) {
-  const def = pick(STARTERS);
-  const b = makeBall(def, x, y, rand(-60, 60), rand(-30, 30));
+  const b = makeBall(START, x, y, rand(-60, 60), rand(-30, 30));
   b.kicked = true;
   S.balls.push(b);
 }
@@ -472,7 +587,7 @@ function step(dt) {
     if (!b.kicked && b.y > L.gapY + b.r) { b.kicked = true; b.vx += rand(-90, 90); }
   }
 
-  // Ball vs ball: merge same species, otherwise mass-weighted elastic response
+  // Ball vs ball: merge same Pokémon, otherwise mass-weighted elastic response
   const n = balls.length, eb = e * 0.85;
   for (let i = 0; i < n; i++) {
     const a = balls[i];
@@ -484,7 +599,7 @@ function step(dt) {
       const d2 = dx * dx + dy * dy;
       if (d2 >= rs * rs) continue;
 
-      if (a.def === b.def && a.def.next) { merge(a, b); break; }
+      if (a.def === b.def && a.def.next !== null) { merge(a, b); break; }
 
       const d = Math.sqrt(d2) || 0.001;
       const nx = dx / d, ny = dy / d, overlap = rs - d;
@@ -517,7 +632,7 @@ function step(dt) {
 
 function merge(a, b) {
   a.dead = b.dead = true;
-  const def = DEX[a.def.next];
+  const def = TIERS[a.def.next];
   const x = (a.x + b.x) / 2, y = (a.y + b.y) / 2;
   const nb = makeBall(def, x, y, (a.vx + b.vx) / 2, (a.vy + b.vy) / 2);
   nb.kicked = true;
@@ -529,8 +644,8 @@ function merge(a, b) {
 function addRing(x, y, r0, r1, color, life, width) {
   S.fx.push({ kind: 'ring', x, y, r0, r1, color, life, max: life, width });
 }
-function addText(x, y, text, color, size, life) {
-  S.fx.push({ kind: 'text', x, y, text, color, size, life, max: life });
+function addText(x, y, text, sub, color, size, life) {
+  S.fx.push({ kind: 'text', x, y, text, sub, color, size, life, max: life });
 }
 function addSparks(x, y, count, colors, speed) {
   for (let i = 0; i < count; i++) {
@@ -546,38 +661,57 @@ function celebrate(def, x, y) {
   // Local white pop at the merge point
   S.fx.push({ kind: 'flash', x, y, r: r * 1.8, life: 0.18, max: 0.18 });
 
-  if (def.stage === 2) {
-    addRing(x, y, r, r * 3, def.color, 0.6, 6);
-    addSparks(x, y, 14, [def.color, '#fff'], 260);
-    addText(x, y - r - 8, 'EVOLVED!', def.color, 26, 1.1);
-    S.flash = Math.max(S.flash, 0.12);
-    Sound.evolve(2);
-  } else if (def.stage === 3) {
+  if (def.final) {
     S.finals++;
     addRing(x, y, r, r * 3.2, def.color, 0.7, 7);
     addRing(x, y, r, r * 5, '#FFD54A', 1.0, 10);
     addSparks(x, y, 34, ['#FFD54A', '#FFF3B0', def.color], 420);
-    addText(x, y - r - 10, 'FINAL FORM!', '#FFD54A', 36, 1.5);
+    addText(x, y - r - 10, 'FINAL FORM!', def.name, '#FFD54A', 34, 1.5);
     S.flash = Math.max(S.flash, 0.35);
-    Sound.evolve(3);
+    Sound.evolve(def.tier);
     Sound.finalForm();
-  } else if (def.stage === 4) {
-    S.megas++;
-    S.finals++;
-    for (let i = 0; i < 5; i++) {
-      addRing(x, y, r, r * (3 + i * 1.4), `hsl(${i * 72},100%,62%)`, 0.9 + i * 0.2, 12);
-    }
-    addSparks(x, y, 70, ['#FF4D4D', '#FFD54A', '#4CD964', '#4D9DFF', '#B061FF', '#fff'], 600);
-    S.flash = 0.75;
-    S.slowmo = 2.0;                                  // 30% speed for 2 real seconds
-    S.banner = { text: 'MEGA EVOLUTION!', sub: def.name, life: 2.4, max: 2.4, mega: true };
-    Sound.mega();
+  } else {
+    addRing(x, y, r, r * 3, def.color, 0.6, 6);
+    addSparks(x, y, 14, [def.color, '#fff'], 260);
+    addText(x, y - r - 8, 'EVOLVED!', def.name, def.color, 26, 1.1);
+    S.flash = Math.max(S.flash, 0.12);
+    Sound.evolve(def.tier);
   }
+
+  S.highest = Math.max(S.highest, def.tier);
+
+  // New all-time record far enough up the chain: the big moment
+  if (def.tier > S.record) {
+    S.record = def.tier;
+    saveRecord(S.record);
+    if (def.tier >= RECORD_MIN_TIER) {
+      for (let i = 0; i < 5; i++) {
+        addRing(x, y, r, r * (3 + i * 1.4), `hsl(${i * 72},100%,62%)`, 0.9 + i * 0.2, 12);
+      }
+      addSparks(x, y, 70, ['#FF4D4D', '#FFD54A', '#4CD964', '#4D9DFF', '#B061FF', '#fff'], 600);
+      S.flash = 0.75;
+      S.slowmo = 2.0;                                // 30% speed for 2 real seconds
+      S.banner = { text: 'NEW RECORD!', sub: `${def.num} ${def.name}`, life: 2.4, max: 2.4, rainbow: true };
+      Sound.record();
+    }
+  }
+}
+
+function endRound() {
+  S.clock = 0;
+  S.timeUp = true;
+  S.slowmo = 0;
+  S.resetT = 0;                        // an OVERFLOW in progress just stays frozen
+  const best = TIERS[S.highest - 1];
+  S.banner = { text: "TIME'S UP!", sub: `made it to ${best.num} ${best.name}`, life: 3.0, max: 3.0, gold: true };
+  S.flash = 0.35;
+  Sound.timeUp();
 }
 
 function triggerOverflow() {
   S.resetT = 2.0;
-  S.banner = { text: 'OVERFLOW!', sub: 'resetting…', life: 2.0, max: 2.0, mega: false };
+  const best = TIERS[S.highest - 1];
+  S.banner = { text: 'OVERFLOW!', sub: `made it to ${best.num} ${best.name}`, life: 2.0, max: 2.0, rainbow: false };
   S.flash = 0.4;
   Sound.overflow();
 }
@@ -594,11 +728,7 @@ function update(rdt) {
   S.flash = Math.max(0, S.flash - rdt * 2.2);
   if (S.banner && (S.banner.life -= rdt) <= 0) S.banner = null;
 
-  if (S.resetT > 0) {
-    S.resetT -= rdt;
-    if (S.resetT <= 0) resetSim();
-  }
-
+  // In-flight effects finish playing even after the round ends
   for (const f of S.fx) {
     f.life -= rdt;
     if (f.kind === 'spark') {
@@ -607,6 +737,21 @@ function update(rdt) {
     }
   }
   S.fx = S.fx.filter(f => f.life > 0);
+
+  // Round clock (wall-clock time, so the video is exactly 2:30)
+  if (!S.timeUp) {
+    S.clock -= rdt;
+    const whole = Math.ceil(S.clock);
+    if (whole !== S.lastTick && whole <= 5 && whole > 0) Sound.tick();
+    S.lastTick = whole;
+    if (S.clock <= 0) endRound();
+  }
+  if (S.timeUp) { Recorder.tick(rdt); return; }   // frozen: no physics, no spawns
+
+  if (S.resetT > 0) {
+    S.resetT -= rdt;
+    if (S.resetT <= 0) resetSim();
+  }
 
   // Simulation time
   const sdt = rdt * (S.slowmo > 0 ? 0.3 : 1);
@@ -635,22 +780,28 @@ function update(rdt) {
     S.overflowT = blocked ? S.overflowT + sdt : 0;
     if (S.overflowT > 3) triggerOverflow();
   }
-
-  updateStats();
 }
 
 /* =====================================================================
    RENDERING
    ===================================================================== */
 
-// Each species' orb (glow, fill, outline, labels) is pre-rendered once.
+// Each Pokémon's orb (glow, fill, outline, labels) is pre-rendered once.
 // shadowBlur is expensive on phones; this keeps 60fps with many balls.
 const sprites = new Map();
 const SPRITE_PAD = 16;
 
+function requestImage(def) {
+  def.imgRequested = true;
+  const img = new Image();     // no crossOrigin needed: we only draw, never read pixels
+  img.onload = () => { def.img = img; sprites.delete(def.id); };
+  img.src = def.imageUrl;
+}
+
 function getSprite(def) {
   let s = sprites.get(def.id);
   if (s) return s;
+  if (def.imageUrl && !def.imgRequested) requestImage(def);
 
   const r = def.r, size = (r + SPRITE_PAD) * 2;
   const c = document.createElement('canvas');
@@ -681,19 +832,17 @@ function getSprite(def) {
     drawLabels(g, def);
   }
 
-  // Neon outline (Megas get an animated rainbow outline drawn live instead)
-  if (!def.mega) {
-    g.beginPath(); g.arc(0, 0, r - 1.5, 0, TAU);
-    g.shadowColor = def.color;
-    g.shadowBlur = 12 * scale;
-    g.strokeStyle = def.color;
-    g.lineWidth = 3;
-    g.stroke(); g.stroke();
-    g.shadowBlur = 0;
-    g.strokeStyle = 'rgba(255,255,255,0.5)';
-    g.lineWidth = 1;
-    g.stroke();
-  }
+  // Neon outline
+  g.beginPath(); g.arc(0, 0, r - 1.5, 0, TAU);
+  g.shadowColor = def.color;
+  g.shadowBlur = 12 * scale;
+  g.strokeStyle = def.color;
+  g.lineWidth = def.final ? 4 : 3;
+  g.stroke(); g.stroke();
+  g.shadowBlur = 0;
+  g.strokeStyle = def.final ? 'rgba(255,229,140,0.9)' : 'rgba(255,255,255,0.5)';  // gold rim on final forms
+  g.lineWidth = def.final ? 1.5 : 1;
+  g.stroke();
 
   s = { canvas: c, size };
   sprites.set(def.id, s);
@@ -705,65 +854,23 @@ function drawLabels(g, def) {
   g.textAlign = 'center';
   g.textBaseline = 'middle';
 
-  let name = def.name, nameY = -r * 0.06, typeY = r * 0.42;
-  if (def.mega) {
-    name = def.name.replace(/^MEGA\s+/, '');
-    fitFont(g, 'MEGA', maxW * 0.7, r * 0.3, 900);
-    g.fillStyle = '#FFD54A';
-    g.shadowColor = '#FFB300'; g.shadowBlur = 8 * scale;
-    g.fillText('MEGA', 0, -r * 0.42);
-    nameY = r * 0.04; typeY = r * 0.46;
-  }
-
-  fitFont(g, name, maxW, r * 0.46, 800);
+  fitFont(g, def.name, maxW, r * 0.46, 800);
   g.fillStyle = '#fff';
   g.shadowColor = def.color; g.shadowBlur = 6 * scale;
-  g.fillText(name, 0, nameY);
+  g.fillText(def.name, 0, -r * 0.06);
 
-  fitFont(g, def.type.toUpperCase(), maxW * 0.75, r * 0.24, 700);
+  const label = `${def.num} ${def.type.toUpperCase()}`;
+  fitFont(g, label, maxW * 0.8, r * 0.24, 700);
   g.shadowBlur = 0;
   g.fillStyle = def.color;
-  g.fillText(def.type.toUpperCase(), 0, typeY);
+  g.fillText(label, 0, r * 0.42);
 }
-
-const hasConic = typeof ctx.createConicGradient === 'function';
 
 function drawBall(b) {
   const sp = getSprite(b.def);
-  let k = b.pop < 1 ? 0.6 + 0.4 * easeOutBack(b.pop) : 1;
-  if (b.def.mega) k *= 1 + 0.05 * Math.sin(S.time * 6 + b.id);   // Mega pulse
-
+  const k = b.pop < 1 ? 0.6 + 0.4 * easeOutBack(b.pop) : 1;
   const size = sp.size * k;
   ctx.drawImage(sp.canvas, b.x - size / 2, b.y - size / 2, size, size);
-
-  if (b.def.mega) drawMegaOutline(b, k);
-}
-
-function drawMegaOutline(b, k) {
-  const r = b.r * k, hue = (S.time * 140 + b.id * 40) % 360;
-  ctx.save();
-  // Golden aura
-  ctx.globalCompositeOperation = 'lighter';
-  const aura = ctx.createRadialGradient(b.x, b.y, r * 0.8, b.x, b.y, r * 1.6);
-  aura.addColorStop(0, 'rgba(255,213,74,0.25)');
-  aura.addColorStop(1, 'rgba(255,213,74,0)');
-  ctx.fillStyle = aura;
-  ctx.beginPath(); ctx.arc(b.x, b.y, r * 1.6, 0, TAU); ctx.fill();
-  ctx.globalCompositeOperation = 'source-over';
-
-  // Spinning rainbow ring
-  let stroke = `hsl(${hue},100%,60%)`;
-  if (hasConic) {
-    stroke = ctx.createConicGradient(S.time * 3, b.x, b.y);
-    for (let i = 0; i <= 6; i++) stroke.addColorStop(i / 6, `hsl(${i * 60},100%,60%)`);
-  }
-  ctx.beginPath(); ctx.arc(b.x, b.y, r - 2, 0, TAU);
-  ctx.lineWidth = 5;
-  ctx.strokeStyle = stroke;
-  ctx.shadowColor = `hsl(${hue},100%,60%)`;
-  ctx.shadowBlur = blur(22);
-  ctx.stroke();
-  ctx.restore();
 }
 
 function drawTitle() {
@@ -821,6 +928,61 @@ function drawArena() {
   ctx.restore();
 }
 
+// Pokédex progress strip: last few reached tiers, then "?" for what's next.
+function drawLadder() {
+  const hi = S.highest;
+  const first = Math.max(1, hi - 3);
+  const last = Math.min(TIERS.length, first + 5);
+  const gap = 66, mr = 19;
+  const x0 = L.cx - (last - first) * gap / 2, y = L.ladderY;
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.font = `800 12px ${FONT}`;
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.fillText('P O K É D E X   P R O G R E S S', L.cx, y - 38);
+
+  for (let t = first; t <= last; t++) {
+    const def = TIERS[t - 1], x = x0 + (t - first) * gap;
+
+    // Chevron between entries
+    if (t > first) {
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.font = `800 14px ${FONT}`;
+      ctx.fillText('›', x - gap / 2, y);
+    }
+
+    if (t <= hi) {
+      const sp = getSprite(def), size = sp.size * mr / def.r;
+      ctx.drawImage(sp.canvas, x - size / 2, y - size / 2, size, size);
+      if (t === hi) {                  // pulsing marker on the current best
+        ctx.strokeStyle = '#FFD54A';
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.5 + 0.5 * Math.sin(S.time * 5);
+        ctx.beginPath(); ctx.arc(x, y, mr + 6, 0, TAU); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      ctx.fillStyle = def.color;
+      fitFont(ctx, def.num, gap - 6, 11, 800);
+      ctx.fillText(def.num, x, y + mr + 13);
+    } else {
+      ctx.setLineDash([3, 4]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, mr, 0, TAU); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font = `900 16px ${FONT}`;
+      ctx.fillText('?', x, y + 1);
+      ctx.font = `800 11px ${FONT}`;
+      ctx.fillText(def.num, x, y + mr + 13);
+    }
+  }
+  ctx.restore();
+}
+
 function drawFx() {
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
@@ -862,8 +1024,9 @@ function drawFx() {
     const t = 1 - f.life / f.max;
     const pop = t < 0.15 ? 0.6 + 0.4 * easeOutBack(t / 0.15) : 1;
     ctx.globalAlpha = t < 0.7 ? 1 : (1 - t) / 0.3;
-    ctx.font = `900 ${f.size * pop}px ${FONT}`;
     const y = f.y - 55 * easeOut(t);
+
+    ctx.font = `900 ${f.size * pop}px ${FONT}`;
     ctx.lineWidth = 5;
     ctx.strokeStyle = 'rgba(0,0,0,0.85)';
     ctx.shadowBlur = 0;
@@ -872,6 +1035,16 @@ function drawFx() {
     ctx.shadowColor = f.color;
     ctx.shadowBlur = blur(14);
     ctx.fillText(f.text, f.x, y);
+
+    if (f.sub) {                       // the Pokémon it just became
+      const sy = y + f.size * 0.8;
+      ctx.font = `800 ${f.size * 0.55 * pop}px ${FONT}`;
+      ctx.shadowBlur = 0;
+      ctx.lineWidth = 4;
+      ctx.strokeText(f.sub, f.x, sy);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(f.sub, f.x, sy);
+    }
   }
   ctx.restore();
 }
@@ -897,11 +1070,16 @@ function drawBanner() {
 
   fitFont(ctx, B.text, 500, 60, 900);
   let fill;
-  if (B.mega) {
+  if (B.rainbow) {
     fill = ctx.createLinearGradient(-250, 0, 250, 0);
     const shift = S.time * 120;
     for (let i = 0; i <= 6; i++) fill.addColorStop(i / 6, `hsl(${(i * 60 + shift) % 360},100%,62%)`);
     ctx.shadowColor = '#fff';
+  } else if (B.gold) {
+    fill = ctx.createLinearGradient(0, -30, 0, 30);
+    fill.addColorStop(0, '#FFF3B0');
+    fill.addColorStop(1, '#FFB300');
+    ctx.shadowColor = '#FFB300';
   } else {
     const on = Math.floor(S.time * 8) % 2 === 0;
     fill = on ? '#FF3B5C' : '#FF8FA3';
@@ -917,23 +1095,69 @@ function drawBanner() {
   if (B.sub) {
     fitFont(ctx, B.sub, 440, 26, 800);
     ctx.shadowBlur = blur(10);
-    ctx.fillStyle = B.mega ? '#FFD54A' : '#fff';
+    ctx.fillStyle = B.rainbow ? '#FFD54A' : '#fff';
+    ctx.shadowColor = B.gold ? '#FFB300' : ctx.shadowColor;
     ctx.fillText(B.sub, 0, 44);
   }
   ctx.restore();
 }
 
-function drawHint() {
-  if (S.tapped) return;
+// Round countdown at the top: white, red + pulsing for the last 10s, gold at 0:00.
+function drawTimer() {
+  const secs = Math.max(0, Math.ceil(S.clock));
+  const text = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  const urgent = !S.timeUp && S.clock <= 10;
+  const color = S.timeUp ? '#FFD54A' : urgent ? '#FF3B5C' : '#FFFFFF';
+  const pulse = urgent ? 1 + 0.12 * Math.pow(S.clock - Math.floor(S.clock), 3) : 1;
+
   ctx.save();
-  ctx.globalAlpha = 0.55 + 0.35 * Math.sin(S.time * 3);
+  ctx.translate(L.cx, L.timerY);
+  ctx.scale(pulse, pulse);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#fff';
-  fitFont(ctx, 'TAP TO ENABLE SOUND', 480, 18, 800);
-  ctx.fillText('TAP TO ENABLE SOUND', L.cx, L.cy + L.R + 48);
-  fitFont(ctx, 'tap inside the ring to drop a Pokémon', 480, 15, 600);
-  ctx.fillText('tap inside the ring to drop a Pokémon', L.cx, L.cy + L.R + 74);
+  ctx.font = `900 36px ${FONT}`;
+
+  // Fixed-width digit slots so the numbers don't jiggle as they change
+  const slot = ctx.measureText('0').width, colon = ctx.measureText(':').width;
+  const widths = [...text].map(ch => ch === ':' ? colon : slot);
+  let x = -widths.reduce((a, w) => a + w, 0) / 2;
+
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = blur(S.timeUp ? 20 : 12);
+  [...text].forEach((ch, i) => {
+    ctx.fillText(ch, x + widths[i] / 2, 0);
+    x += widths[i];
+  });
+  ctx.restore();
+}
+
+// Round counter, top-left (drawn on the canvas so it's in recorded videos).
+function drawStats() {
+  const name = t => `${TIERS[t - 1].name.toUpperCase()} ${TIERS[t - 1].num}`;
+  const rows = [
+    ['EVOLUTIONS', String(S.evolutions)],
+    ['FINAL FORMS', String(S.finals)],
+    ['HIGHEST', name(S.highest)],
+    ['RECORD', S.record ? name(S.record) : '—'],
+  ];
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = `800 13px ${FONT}`;
+  let y = safeTop + 14;
+  for (const [label, val] of rows) {
+    ctx.fillStyle = '#fff';
+    ctx.shadowColor = 'rgba(255,255,255,0.6)';
+    ctx.shadowBlur = blur(6);
+    ctx.fillText(label, 14, y);
+    const x = 14 + ctx.measureText(label + ' ').width;
+    ctx.fillStyle = '#FFD54A';
+    ctx.shadowColor = '#FFB300';
+    ctx.shadowBlur = blur(8);
+    ctx.fillText(val, x, y);
+    y += 17.5;
+  }
   ctx.restore();
 }
 
@@ -943,9 +1167,12 @@ function draw() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
 
+  drawStats();
+  drawTimer();
   drawTitle();
   drawArena();
   for (const b of S.balls) drawBall(b);
+  drawLadder();
   drawFx();
 
   if (S.flash > 0) {
@@ -953,38 +1180,144 @@ function draw() {
     ctx.fillRect(0, 0, LW, LH);
   }
   drawBanner();
-  drawHint();
 }
+
+/* =====================================================================
+   VIDEO RECORDING
+   Records one full round straight from the canvas (1080×1920, 60fps, with
+   sound), keeps going a few seconds into the freeze, then saves the file.
+   ===================================================================== */
+
+const params = new URLSearchParams(location.search);
+// ?upload=/path  → POST the finished video to this same-origin path instead of
+// downloading it (used by render.py). ?autorecord → start on load.
+const UPLOAD_PATH = /^\/(?!\/)/.test(params.get('upload') || '') ? params.get('upload') : null;
+
+const Recorder = {
+  on: false, rec: null, chunks: [], tail: 0, startedAt: 0, frames: 0,
+  TAIL_SECONDS: 3.5,        // how long to keep filming the frozen end screen
+
+  // Best format this browser can record: MP4 (H.264/AAC) first, WebM fallback.
+  pickMime() {
+    const types = [
+      'video/mp4;codecs=avc1.64002A,mp4a.40.2',
+      'video/mp4;codecs=avc1,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+    return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  },
+
+  start() {
+    if (this.on) return;
+    if (!window.MediaRecorder || !canvas.captureStream) {
+      alert("This browser can't record video. Try Chrome or Safari on a computer.");
+      return;
+    }
+    Sound.unlock();
+    this.on = true;
+    resize();                 // lock the canvas to 1080×1920
+    startRound();
+    draw();
+
+    const stream = canvas.captureStream(60);
+    const audio = Sound.recordStream();
+    if (audio) audio.getAudioTracks().forEach(t => stream.addTrack(t));
+
+    const mimeType = this.pickMime();
+    const opts = { videoBitsPerSecond: 8_000_000, audioBitsPerSecond: 192_000 };
+    if (mimeType) opts.mimeType = mimeType;
+    this.rec = new MediaRecorder(stream, opts);
+    this.chunks = [];
+    this.rec.ondataavailable = e => { if (e.data.size) this.chunks.push(e.data); };
+    this.rec.onstop = () => this.save();
+    this.rec.start(1000);
+
+    this.tail = this.TAIL_SECONDS;
+    this.startedAt = performance.now();
+    this.frames = 0;
+    $('recBtn').classList.add('on');
+    $('recBtn').textContent = '⏹';
+    $('recBadge').hidden = false;
+  },
+
+  // Called every frame once the round is over: film the freeze, then stop.
+  tick(rdt) {
+    if (!this.rec) return;
+    this.tail -= rdt;
+    if (this.tail <= 0) this.stop();
+  },
+
+  stop() {
+    if (this.rec && this.rec.state !== 'inactive') this.rec.stop();
+  },
+
+  save() {
+    const type = this.rec.mimeType || 'video/webm';
+    const blob = new Blob(this.chunks, { type });
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const name = `will-it-evolve-${stamp}.${ext}`;
+    const secs = (performance.now() - this.startedAt) / 1000;
+    const fps = (this.frames / secs).toFixed(1);
+
+    this.rec = null;
+    this.chunks = [];
+    this.on = false;
+    resize();                 // back to the normal screen layout
+    $('recBtn').classList.remove('on');
+    $('recBtn').textContent = '⏺';
+    $('recBadge').hidden = true;
+
+    if (UPLOAD_PATH) {
+      fetch(`${UPLOAD_PATH}?name=${encodeURIComponent(name)}&fps=${fps}`, { method: 'POST', body: blob });
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  },
+
+  // On-screen REC badge with elapsed time.
+  frame() {
+    if (!this.on) return;
+    this.frames++;
+    const s = Math.floor((performance.now() - this.startedAt) / 1000);
+    const text = `● REC ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    const badge = $('recBadge');
+    if (badge.textContent !== text) badge.textContent = text;
+  },
+};
 
 /* =====================================================================
    UI
    ===================================================================== */
 
 const $ = id => document.getElementById(id);
-const statEls = { evo: $('sEvo'), fin: $('sFinal'), mega: $('sMega') };
-const lastStats = { evo: -1, fin: -1, mega: -1 };
 
-function updateStats() {
-  const vals = { evo: S.evolutions, fin: S.finals, mega: S.megas };
-  for (const k in vals) {
-    if (vals[k] !== lastStats[k]) { statEls[k].textContent = vals[k]; lastStats[k] = vals[k]; }
-  }
-}
+$('recBtn').addEventListener('click', () => (Recorder.on ? Recorder.stop() : Recorder.start()));
 
-// Tap inside the ring = manual drop (also unlocks audio)
+// Tap inside the ring = manual drop
 canvas.addEventListener('pointerdown', e => {
   e.preventDefault();
-  Sound.unlock();
-  S.tapped = true;
   const rect = canvas.getBoundingClientRect();
   const x = (e.clientX - rect.left) / rect.width * LW;
   const y = (e.clientY - rect.top) / rect.height * LH;
-  const r1 = STAGE_RADIUS[1];
-  if (Math.hypot(x - L.cx, y - L.cy) < L.R - r1 && S.resetT <= 0) spawnAt(x, y);
+  if (Math.hypot(x - L.cx, y - L.cy) < L.R - START.r && S.resetT <= 0 && !S.timeUp) spawnAt(x, y);
 });
 
-// Any first interaction anywhere also unlocks audio
-window.addEventListener('pointerdown', () => { Sound.unlock(); S.tapped = true; }, { capture: true });
+// Audio starts on load if the browser allows it. If it's blocked, any touch,
+// click or key press starts it (different browsers count different events).
+for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) {
+  window.addEventListener(ev, () => Sound.unlock(), { capture: true });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Sound.unlock(); });
 
 const muteBtn = $('muteBtn');
 function toggleMute() {
@@ -996,7 +1329,8 @@ muteBtn.addEventListener('click', toggleMute);
 const panel = $('panel');
 $('setBtn').addEventListener('click', () => { panel.hidden = !panel.hidden; });
 $('closeBtn').addEventListener('click', () => { panel.hidden = true; });
-$('resetBtn').addEventListener('click', () => { resetSim(); panel.hidden = true; });
+$('resetBtn').addEventListener('click', () => { startRound(); panel.hidden = true; });
+$('clearBtn').addEventListener('click', () => { S.record = 0; saveRecord(0); });
 
 // Bind a slider to a Settings key with a formatted readout
 function bindSlider(inputId, labelId, key, fmt) {
@@ -1015,7 +1349,7 @@ bindSlider('inBounce', 'vBounce', 'bounce', v => v.toFixed(2));
 // Keyboard shortcuts for desktop recording: M = mute, R = reset
 window.addEventListener('keydown', e => {
   if (e.key === 'm' || e.key === 'M') toggleMute();
-  if (e.key === 'r' || e.key === 'R') resetSim();
+  if (e.key === 'r' || e.key === 'R') startRound();
 });
 
 window.addEventListener('resize', resize);
@@ -1025,7 +1359,9 @@ window.addEventListener('resize', resize);
    ===================================================================== */
 
 resize();
-resetSim();
+startRound();
+Sound.unlock();     // try to start sound right away
+if (params.has('autorecord')) Recorder.start();
 
 let lastT = performance.now();
 function frame(now) {
@@ -1033,6 +1369,7 @@ function frame(now) {
   lastT = now;
   update(rdt);
   draw();
+  Recorder.frame();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

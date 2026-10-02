@@ -51,7 +51,20 @@ Open the page (locally or on the live site) and press **⏺** in the top-right c
 
 ---
 
-## Current video: `hunter-x-hunter.html`
+## Current video: `sonic.html`
+
+**Hook:** "Comment below 👇 Who will be the STRONGEST?"
+
+Same engine and layout as the Hunter x Hunter video (including the top space), with Sonic characters shown as **faces** instead of names:
+
+- **Every ball that drops is Tails.** Two of the same character merge into the next one up the power ladder:
+  Tails → Amy → Rouge → Knuckles → Metal Sonic → Silver → Shadow → Sonic → **Super Sonic** → **Super Shadow** → **Hyper Sonic**
+- **Faces are drawn in code**, with no image files: neon cartoon heads in 3/4 view. Each character has its own template in `FACE_STYLES` (quills, ears, tails, dreadlocks, bangs and headband, bat ears, metal jaw) plus its own fur, eye and muzzle colors in `CHAIN`. Adding an `imageUrl` to a character draws that picture instead.
+- **Text:** "POWER UP!" the first time each character is reached. The bold names above are super forms and get the golden **"SUPER FORM!"** burst.
+- **On screen:** counter (power ups, super forms, highest, record), plus the power ladder with names under the faces.
+- **What it reaches in 2:00:** in 20 simulated rounds, 15 ended on **LV.9 Super Sonic** and 5 on LV.8 Sonic, with no overflows.
+
+## Finished: `hunter-x-hunter.html`
 
 **Hook:** "Comment below 👇 Who will be the STRONGEST?" (the `HOOK` constant)
 
@@ -102,7 +115,7 @@ With the video settings, about 480 Bulbasaurs drop in 2:00. Each step needs twic
 
 ## Starting the next video
 
-1. Create a new single `.html` file in this folder, using the newest video (`hunter-x-hunter.html`) as the template, since it has the top-space layout. Reuse its timer, freeze, recorder, sound setup, canvas sizing and neon look.
+1. Create a new single `.html` file in this folder, using the newest video as the template (currently `sonic.html`). It has the top-space layout and drawn faces. Reuse its timer, freeze, recorder, sound setup, canvas sizing and neon look.
 2. Write a new hook question for the top.
 3. Keep the 2:00 round and the freeze at the end.
 4. Add it to `index.html`.
@@ -113,7 +126,8 @@ With the video settings, about 480 Bulbasaurs drop in 2:00. Each step needs twic
 
 | File | Purpose |
 |---|---|
-| `hunter-x-hunter.html` | Current video: Hunter x Hunter power ladder |
+| `sonic.html` | Current video: Sonic power ladder with drawn faces |
+| `hunter-x-hunter.html` | Finished video: Hunter x Hunter power ladder |
 | `pokemon-evolve.html` | Finished video: Pokédex evolution chain |
 | `index.html` | Live-site home page that links to each video |
 | `render.py` | Renders a page to a TikTok-ready MP4 in `renders/` |

@@ -31,7 +31,8 @@ tiktok-videos/
 │   ├── 02-hunter-x-hunter.html
 │   ├── 03-sonic.html
 │   ├── 04-dragon-ball.html
-│   └── 05-naruto.html
+│   ├── 05-naruto.html
+│   └── 06-one-piece.html
 ├── tools/
 │   └── render.py        ← records a video page to an MP4
 └── renders/             ← finished MP4s (git-ignored, never committed)
@@ -156,6 +157,7 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 | 03 | `videos/03-sonic.html` | Comment below 👇 Who will be the STRONGEST? | LV.9 Super Sonic (75%) or LV.8 Sonic |
 | 04 | `videos/04-dragon-ball.html` | Comment below 👇 Who will win the TOURNAMENT? | Any of the 12 can win; about 40% end in a decision with 2 left |
 | 05 | `videos/05-naruto.html` | Comment below 👇 How many CLONES at the end? | Anywhere from about 5 to 220 clones |
+| 06 | `videos/06-one-piece.html` | Comment below 👇 What will the MAX BOUNTY be? | Luffy ฿3B (about 58%) or Zoro ฿1.111B, often decided in the last 20 seconds |
 
 ### 01 · Pokémon: Pokédex evolution chain
 - **Look:** neon on black, a glowing ring that cycles through rainbow colors, a chute at the top.
@@ -199,6 +201,23 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 - **Balance:** villain HP scales with the current clone count (`TUNING.hpPerClone`), so every wave bites and the count rises and crashes in waves.
 - **Sound:** taiko drum loop, smoke-poof crackles, villain drones, gong.
 
+### 06 · One Piece: bounty ladder (the merge game from 01, restyled)
+- **Why the same game as 01:** the user asked for the merge mechanic again, with a One Piece look instead of neon.
+- **Look:**
+  - The page is a treasure-map parchment with burnt edges, a map grid and a compass rose.
+  - The arena is a wooden **ship's wheel** with brass rivets and turning handles, and **open sea** inside (waves, bubbles).
+  - Lettering is wanted-poster style (Rockwell); the timer is a wooden sign.
+- **Badges:** each ball is a round **WANTED badge** with a code-drawn face and its bounty.
+- **The ladder:** every drop is **Chopper** (฿1,000). Two of the same merge up a real-bounty ladder: Nami → Brook → Franky → Usopp → Robin → Sanji → Jinbe → Zoro → **Luffy** (฿3B) → Buggy → Mihawk → Blackbeard → Shanks → Big Mom → Kaido → Whitebeard → **Roger**. The left edge shows a vertical bounty ladder.
+- **Sea events every ~12s:**
+  - **Rough Seas:** gravity swings side to side and it rains.
+  - **Devil Fruit:** whoever touches it goes up one pirate.
+  - **Buster Call:** three cannonballs that explode.
+  - **Sea King:** a serpent swims under the pile and launches it.
+- **Tuning:** `TUNING.attract = 2000` makes two identical badges close together pull toward each other. Without it, big pairs rarely met and Luffy was never reached.
+- **Sound:** coin clinks on merges, wooden knocks on walls, shanty fanfares, wind and thunder, cannon booms, ocean swells, ship's bell.
+- **Bands:** the first video with the shorter ~285px bottom band.
+
 ---
 
 ## Styles used so far (pick something different next time)
@@ -210,6 +229,7 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 | 03 | Neon on black, cartoon faces | Circle and chute, gravity | Merge chain (power ladder) | Same as 01 |
 | 04 | Manga/comic paper, ink, halftone | Square stage, top-down | Battle royale with HP, K.O.s, power-up pickups | Punchy hits, booms, risers |
 | 05 | Red-moon horror-fantasy, glitch flashes | The moon, swirling vortex | Swarm growth vs. enemy waves (guess the number) | Taiko loop, poofs, drones |
+| 06 | Treasure map, wooden ship's wheel, wanted posters | Wheel and chute, gravity, sea inside | Merge chain (the user asked for 01's game) + sea events | Coins, wood knocks, shanty, ocean |
 
 **Not used yet:**
 - **Looks:** pixel-art/retro 16-bit, chalkboard doodle, vaporwave, underwater, blueprint, stained glass, claymation-like soft shapes, newspaper print.

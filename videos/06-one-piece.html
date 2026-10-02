@@ -1,0 +1,1995 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>One Piece: What Will the MAX Bounty Be?</title>
+<style>
+  /* ---------- Page shell: black, no scrolling, stage centered ---------- */
+  html, body {
+    margin: 0; height: 100%; background: #000; overflow: hidden;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+
+  /* The stage is sized by JS to a 9:16 (or taller) portrait box.
+     --u = CSS pixels per logical unit (logical width is 540). */
+  #stage { position: relative; --u: 1px; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  /* ---------- Recording indicator (on screen only, not in the video) ---------- */
+  #recBadge {
+    position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + var(--u) * 14);
+    transform: translateX(-50%); padding: calc(var(--u) * 6) calc(var(--u) * 14);
+    border-radius: 999px; background: rgba(179, 38, 30, 0.92); color: #fff;
+    font: 800 calc(var(--u) * 14) system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: 0.08em; pointer-events: none;
+  }
+  #recBadge[hidden] { display: none; }
+
+  /* ---------- Buttons (record / mute / settings), wooden style ---------- */
+  #btns {
+    position: absolute;
+    right: calc(var(--u) * 12);
+    top: calc(env(safe-area-inset-top, 0px) + var(--u) * 10);
+    display: flex; gap: calc(var(--u) * 8);
+  }
+  .iconBtn {
+    width: calc(var(--u) * 38); height: calc(var(--u) * 38);
+    border-radius: 50%; border: 3px solid #3B2210;
+    background: #E9D3A0; color: #3B2210; cursor: pointer;
+    font-size: calc(var(--u) * 16); line-height: 1; padding: 0;
+    box-shadow: 0 calc(var(--u) * 3) 0 #3B2210;
+  }
+  #recBtn.on { background: #B3261E; color: #fff; }
+
+  /* ---------- Settings panel (parchment) ---------- */
+  #panel {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: calc(var(--u) * 380); padding: calc(var(--u) * 20);
+    background: #F3E3B5; border: 4px solid #4A2C14; border-radius: calc(var(--u) * 6);
+    box-shadow: 0 calc(var(--u) * 6) 0 #4A2C14;
+    color: #3B2210; font: 700 calc(var(--u) * 15) Rockwell, Georgia, serif;
+  }
+  #panel[hidden] { display: none; }
+  #panel h2 { margin: 0 0 calc(var(--u) * 14); font-size: calc(var(--u) * 24); text-align: center; letter-spacing: 0.12em; }
+  #panel label { display: block; margin-bottom: calc(var(--u) * 14); }
+  #panel label span { float: right; color: #B3261E; }
+  #panel input[type=range] { width: 100%; margin-top: calc(var(--u) * 6); accent-color: #8B5A2B; }
+  .row { display: flex; gap: calc(var(--u) * 10); margin-top: calc(var(--u) * 6); }
+  .row button {
+    flex: 1; padding: calc(var(--u) * 10); cursor: pointer; border-radius: calc(var(--u) * 4);
+    font: 700 calc(var(--u) * 14) Rockwell, Georgia, serif; letter-spacing: 0.04em;
+    color: #FFF4D6; background: #7A4A22; border: 3px solid #3B2210;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="recBadge" hidden>● REC 0:00</div>
+
+  <div id="btns">
+    <button class="iconBtn" id="recBtn" aria-label="Record a video">⏺</button>
+    <button class="iconBtn" id="muteBtn" aria-label="Toggle sound">🔊</button>
+    <button class="iconBtn" id="setBtn" aria-label="Settings">⚙️</button>
+  </div>
+
+  <div id="panel" hidden>
+    <h2>SETTINGS</h2>
+    <label>Drop every <span id="vSpawn"></span>
+      <input id="inSpawn" type="range" min="0.1" max="1.5" step="0.01">
+    </label>
+    <label>Gravity <span id="vGrav"></span>
+      <input id="inGrav" type="range" min="400" max="2500" step="50">
+    </label>
+    <label>Bounciness <span id="vBounce"></span>
+      <input id="inBounce" type="range" min="0.1" max="0.95" step="0.05">
+    </label>
+    <div class="row">
+      <button id="resetBtn">RESET</button>
+      <button id="clearBtn">CLEAR RECORD</button>
+      <button id="closeBtn">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   CONFIG
+   ===================================================================== */
+
+const TAU = Math.PI * 2;
+const DEG = Math.PI / 180;
+const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+const POSTER = 'Rockwell, "Rockwell Extra Bold", Georgia, "Times New Roman", serif';   // wanted-poster slab serif
+const INK = '#2B1A0E';
+const BROWN = '#3B2210';
+const PARCH = '#E9D3A0';
+const GOLD = '#F2C14E';
+const CREAM = '#FFF4D6';
+
+// Length of one round. When the clock hits 0:00 everything freezes in place.
+const ROUND_SECONDS = 120;   // 2:00
+
+// Solid black bands at the top and bottom so TikTok's UI never covers the
+// action: 220px on top, ~285px at the bottom of the 1920px video.
+const TOP_SPACE = 110;
+const BOTTOM_SPACE = 142;
+
+// The hook: a comment prompt + question at the top for retention.
+const HOOK = ['Comment below 👇', 'What will the MAX', 'BOUNTY be?'];
+
+/* ONE straight bounty ladder (real bounties), lowest → highest.
+   Two of the same pirate merge into the NEXT entry in this list:
+   Chopper → Nami → … → Zoro → Luffy → Buggy → … → Whitebeard → Roger.
+   emperor / king = Emperor of the Sea / Pirate King (golden burst).
+   Each face is drawn in code (see FACES); color is used for effects. */
+const CHAIN = [
+  { name: 'Chopper',    full: 'Tony Tony Chopper', bounty: 1000,       style: 'chopper',    color: '#FF7FB0' },
+  { name: 'Nami',       full: 'Nami',              bounty: 366000000,  style: 'nami',       color: '#FF8A1F' },
+  { name: 'Brook',      full: 'Brook',             bounty: 383000000,  style: 'brook',      color: '#9B59B6' },
+  { name: 'Franky',     full: 'Franky',            bounty: 394000000,  style: 'franky',     color: '#3FB6E8' },
+  { name: 'Usopp',      full: 'Usopp',             bounty: 500000000,  style: 'usopp',      color: '#E8B931' },
+  { name: 'Robin',      full: 'Nico Robin',        bounty: 930000000,  style: 'robin',      color: '#7B61FF' },
+  { name: 'Sanji',      full: 'Vinsmoke Sanji',    bounty: 1032000000, style: 'sanji',      color: '#F2C200' },
+  { name: 'Jinbe',      full: 'Jinbe',             bounty: 1100000000, style: 'jinbe',      color: '#3D7BFF' },
+  { name: 'Zoro',       full: 'Roronoa Zoro',      bounty: 1111000000, style: 'zoro',       color: '#2E9B4F' },
+  { name: 'Luffy',      full: 'Monkey D. Luffy',   bounty: 3000000000, style: 'luffy',      color: '#D7262D', emperor: true },
+  { name: 'Buggy',      full: 'Buggy the Clown',   bounty: 3189000000, style: 'buggy',      color: '#2E5BD8', emperor: true },
+  { name: 'Mihawk',     full: 'Dracule Mihawk',    bounty: 3590000000, style: 'mihawk',     color: '#8E1B1B' },
+  { name: 'Blackbeard', full: 'Marshall D. Teach', bounty: 3996000000, style: 'blackbeard', color: '#4A148C', emperor: true },
+  { name: 'Shanks',     full: 'Shanks',            bounty: 4048900000, style: 'shanks',     color: '#C8102E', emperor: true },
+  { name: 'Big Mom',    full: 'Charlotte Linlin',  bounty: 4388000000, style: 'bigmom',     color: '#FF6FB5', emperor: true },
+  { name: 'Kaido',      full: 'Kaido',             bounty: 4611100000, style: 'kaido',      color: '#5E35B1', emperor: true },
+  { name: 'Whitebeard', full: 'Edward Newgate',    bounty: 5046000000, style: 'whitebeard', color: '#E8E2D0', emperor: true },
+  { name: 'Roger',      full: 'Gol D. Roger',      bounty: 5564800000, style: 'roger',      color: '#B3122E', king: true },
+];
+
+// Badge radius grows with every step up the ladder (capped so late tiers still fit).
+const radiusForTier = tier => Math.min(17 + 3.8 * (tier - 1), 80);
+
+// Big celebration (banner + slow-mo) when a NEW all-time record is at least this far up.
+const RECORD_MIN_TIER = 8;
+
+// Expand the table into one config object per pirate.
+const TIERS = CHAIN.map((c, i) => ({
+  ...c,
+  tier: i + 1,
+  id: c.style,
+  r: radiusForTier(i + 1),
+  next: i + 1 < CHAIN.length ? i + 1 : null,   // index of the next tier (null = end of the line)
+}));
+const START = TIERS[0];              // only Chopper ever drops
+
+// Sea events: something new roughly every 12 seconds.
+const EVENTS = [
+  { at: 14,  kind: 'storm' },
+  { at: 26,  kind: 'fruit' },
+  { at: 38,  kind: 'buster' },
+  { at: 50,  kind: 'seaking' },
+  { at: 62,  kind: 'fruit' },
+  { at: 74,  kind: 'storm' },
+  { at: 86,  kind: 'buster' },
+  { at: 98,  kind: 'fruit' },
+  { at: 109, kind: 'seaking' },
+];
+const FRUITS = ['GOMU GOMU', 'MERA MERA', 'GORO GORO', 'OPE OPE', 'YAMI YAMI', 'HITO HITO', 'BARA BARA', 'HANA HANA'];
+
+// User-tweakable settings (bound to the sliders).
+const Settings = { spawnInterval: 0.22, gravity: 1750, bounce: 0.8 };
+
+/* Tuning knobs, chosen by simulating many rounds in the console (README →
+   "Tuning by simulation"). attract = how hard two identical badges that are
+   close (within 2.5× their combined radius) pull toward each other, so big
+   pirates can find their match and Luffy is reachable but not guaranteed. */
+const TUNING = { attract: 2000 };   // tested: ends on Luffy ~58%, Zoro ~42%, often decided in the last 20s
+
+/* =====================================================================
+   CANVAS, SIZING & LAYOUT
+   ===================================================================== */
+
+const stage = document.getElementById('stage');
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const LW = 540;   // logical width; everything is laid out in these units
+let LH = 960;     // logical height (grows on phones taller than 9:16)
+let scale = 1;    // device pixels per logical unit
+const L = {};     // layout
+
+// Laid out top-down inside a 960-tall block (centered on taller phone screens):
+// black band, then the treasure-map panel (counter, timer, hook, ship's wheel), then black band.
+function layout() {
+  const block = (LH - 960) / 2;
+  const top = block + TOP_SPACE;
+  L.cx = LW / 2;
+  L.panelTop = top;
+  L.panelBottom = block + 960 - BOTTOM_SPACE;
+  L.statsY = top + 10;                // counter, top-left
+  L.timerY = top + 32;                // round countdown (wooden sign), top-center
+  L.title1 = top + 84;                // hook: small lead-in line
+  L.title2 = top + 122;               // hook: big lines
+  L.title3 = top + 166;
+  L.hw = 26;                          // half-width of the chute
+  L.chuteTop = top + 196;
+  L.R = 198;                          // inner radius of the wheel (collision surface)
+  L.cy = L.chuteTop + 58 + L.R;
+  L.gapY = L.cy - Math.sqrt(L.R * L.R - L.hw * L.hw);   // where the chute meets the ring
+  L.ladderX = 24;                     // bounty ladder down the left edge
+}
+
+const VIDEO_W = 1080;   // recorded video is 1080×1920 (TikTok's native size)
+
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  let cssW, cssH;
+  if (Recorder.on) {                  // recording: exact 9:16 frame, fitted to the window
+    cssH = Math.min(wh, ww * 16 / 9); cssW = cssH * 9 / 16; LH = 960;
+  } else if (wh / ww >= 16 / 9) {     // tall phone: fill the whole screen
+    cssW = ww; cssH = wh; LH = LW * wh / ww;
+  } else {                            // wider screen: 9:16 box, letterboxed in black
+    cssH = wh; cssW = wh * 9 / 16; LH = 960;
+  }
+  stage.style.width = cssW + 'px';
+  stage.style.height = cssH + 'px';
+  stage.style.setProperty('--u', (cssW / LW) + 'px');
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);   // cap for phone performance
+  scale = Recorder.on ? VIDEO_W / LW : (cssW / LW) * dpr;
+  canvas.width = Math.round(LW * scale);
+  canvas.height = Math.round(LH * scale);
+
+  // Keep everything in place relative to the wheel.
+  const oldCy = L.cy;
+  layout();
+  if (oldCy !== undefined) {
+    for (const o of [...S.balls, ...S.fruits, ...S.cannons]) o.y += L.cy - oldCy;
+  }
+
+  sprites.clear();                    // badges are cached at device resolution
+  buildBackdrop();
+}
+
+/* =====================================================================
+   HELPERS
+   ===================================================================== */
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[(Math.random() * arr.length) | 0];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+// Overshooting pop-in. Exactly 0 at the start: float rounding would otherwise give a
+// tiny negative number, and a negative arc/gradient radius throws and stops the loop.
+const easeOutBack = t => (t <= 0 ? 0 : 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2));
+const elapsed = () => ROUND_SECONDS - S.clock;
+
+// Bounties: ฿3,000,000,000 (full) or ฿3B / ฿1.11B / ฿366M (short).
+const fmtFull = n => '฿' + n.toLocaleString('en-US');
+function fmtShort(n) {
+  if (n >= 1e9) return '฿' + (n / 1e9).toFixed(2).replace(/\.?0+$/, '') + 'B';
+  if (n >= 1e6) return '฿' + Math.round(n / 1e6) + 'M';
+  return '฿' + n.toLocaleString('en-US');
+}
+
+// Set a font that fits `text` into maxW, starting from maxSize.
+function fitFont(g, text, maxW, maxSize, weight, family = FONT) {
+  let size = maxSize;
+  g.font = `${weight} ${size}px ${family}`;
+  const w = g.measureText(text).width;
+  if (w > maxW) {
+    size = Math.max(5, size * maxW / w);
+    g.font = `${weight} ${size}px ${family}`;
+  }
+  return size;
+}
+
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+
+// Poster text: dark outline, then fill.
+function inkText(g, text, x, y, fill, outline = 5) {
+  g.lineJoin = 'round';
+  g.lineWidth = outline;
+  g.strokeStyle = INK;
+  g.strokeText(text, x, y);
+  g.fillStyle = fill;
+  g.fillText(text, x, y);
+}
+
+// All-time record survives reloads (silently skipped if storage is blocked).
+function loadRecord() {
+  try { return parseInt(localStorage.getItem('onePieceRecord'), 10) || 0; } catch { return 0; }
+}
+function saveRecord(v) {
+  try { localStorage.setItem('onePieceRecord', String(v)); } catch {}
+}
+
+/* =====================================================================
+   SOUND (Web Audio, synthesized: coins, wood, shanty, sea)
+   ===================================================================== */
+
+// D major pentatonic: shanty-friendly notes
+const SHANTY = [293.66, 329.63, 369.99, 440, 493.88, 587.33, 659.25, 739.99, 880, 987.77];
+
+const Sound = {
+  ctx: null, out: null, comp: null, speaker: null, recDest: null, noise: null,
+  muted: false, lastBlip: 0, lastCoin: 0,
+
+  // Called on page load (starts immediately where the browser allows autoplay)
+  // and again on every interaction, so audio starts the moment it's permitted.
+  // Graph: sounds → out → compressor → speaker (mute switch) → speakers
+  //                                  ↘ recDest (video recording, ignores mute)
+  unlock() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      this.ctx = new AC();
+      this.comp = this.ctx.createDynamicsCompressor();
+      this.out = this.ctx.createGain();
+      this.out.gain.value = 0.7;
+      this.speaker = this.ctx.createGain();
+      this.speaker.gain.value = this.muted ? 0 : 1;
+      this.out.connect(this.comp);
+      this.comp.connect(this.speaker);
+      this.speaker.connect(this.ctx.destination);
+      const len = this.ctx.sampleRate;
+      this.noise = this.ctx.createBuffer(1, len, len);
+      const d = this.noise.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    // 'suspended' = blocked by autoplay rules; 'interrupted' = iOS paused it (e.g. a call)
+    if (this.ctx.state !== 'running' && this.ctx.state !== 'closed') this.ctx.resume().catch(() => {});
+  },
+
+  // Audio stream for the video recorder (sound is recorded even when muted).
+  recordStream() {
+    if (!this.ctx || !this.ctx.createMediaStreamDestination) return null;
+    if (!this.recDest) {
+      this.recDest = this.ctx.createMediaStreamDestination();
+      this.comp.connect(this.recDest);
+    }
+    return this.recDest.stream;
+  },
+
+  get running() { return !!this.ctx && this.ctx.state === 'running'; },
+
+  setMuted(m) {
+    this.muted = m;
+    if (this.speaker) this.speaker.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.02);
+  },
+
+  get ready() { return this.running && (!this.muted || Recorder.on); },
+
+  note(freq, when, dur, type = 'sine', vol = 0.2, freqTo = 0) {
+    const c = this.ctx, t = c.currentTime + when;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t);
+    if (freqTo) o.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.out);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+
+  // Filtered noise. attack > 0 fades in (ocean swells), otherwise it hits instantly.
+  burst(dur, freq, q, vol, freqTo = 0, when = 0, attack = 0) {
+    const c = this.ctx, t = c.currentTime + when;
+    const src = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    src.buffer = this.noise;
+    src.loop = dur > 0.9;
+    f.type = 'bandpass';
+    f.frequency.setValueAtTime(freq, t);
+    if (freqTo) f.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    f.Q.value = q;
+    if (attack > 0) {
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + attack);
+    } else {
+      g.gain.setValueAtTime(vol, t);
+    }
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(this.out);
+    src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.05);
+  },
+
+  // Wall hit: a wooden knock, pitch picked by where it hit the wheel.
+  blip(angle, strength) {
+    if (!this.ready) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastBlip < 0.045) return;
+    this.lastBlip = now;
+    const idx = Math.floor(((angle + Math.PI) / TAU) * SHANTY.length) % SHANTY.length;
+    this.note(SHANTY[idx] * 0.5, 0, 0.16, 'triangle', 0.05 + 0.12 * strength);
+    this.burst(0.03, 900, 4, 0.08 * strength);
+  },
+
+  // Merge: coins clinking.
+  coin() {
+    if (!this.ready) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastCoin < 0.06) return;
+    this.lastCoin = now;
+    const k = rand(0.97, 1.03);
+    [2093, 2637, 3136].forEach((f, i) => this.note(f * k, i * 0.025, 0.22, 'sine', 0.05));
+  },
+
+  // New pirate reached: a quick shanty fanfare.
+  newPirate() {
+    if (!this.ready) return;
+    [587.33, 739.99, 880, 1174.66].forEach((f, i) => this.note(f, i * 0.06, 0.18, 'square', 0.06));
+    this.note(98, 0, 0.3, 'sine', 0.4, 50);
+  },
+
+  // Emperor / record: big chord and a drum hit.
+  emperor() {
+    if (!this.ready) return;
+    [146.83, 220, 293.66, 369.99, 440, 587.33].forEach((f, i) => this.note(f, i * 0.03, 2.2, 'triangle', 0.08));
+    this.note(73.4, 0, 1.0, 'sine', 0.6, 40);
+    this.burst(0.5, 600, 0.7, 0.25, 150);
+  },
+
+  storm() {
+    if (!this.ready) return;
+    this.burst(3.0, 300, 0.5, 0.3, 1400, 0, 0.6);    // wind
+    this.burst(1.4, 140, 0.7, 0.55, 60);             // thunder
+    this.note(55, 0, 1.3, 'sine', 0.5, 30);
+  },
+
+  cannonFire() {
+    if (!this.ready) return;
+    for (let i = 0; i < 3; i++) {
+      this.note(90, i * 0.25, 0.5, 'sine', 0.6, 35);
+      this.burst(0.4, 500, 0.8, 0.4, 120, i * 0.25);
+    }
+  },
+
+  cannon() {
+    if (!this.ready) return;
+    this.burst(0.9, 1400, 0.6, 0.6, 90);
+    this.note(70, 0, 0.9, 'sine', 0.8, 25);
+  },
+
+  roar() {
+    if (!this.ready) return;
+    this.note(70, 0, 1.6, 'sawtooth', 0.14, 45);
+    this.note(105, 0.05, 1.4, 'sawtooth', 0.08, 60);
+    this.burst(1.5, 250, 0.8, 0.35, 120);
+  },
+
+  fruit() {
+    if (!this.ready) return;
+    [0, 0.12, 0.24].forEach(w => this.note(700, w, 0.12, 'sine', 0.1, 1100));
+    this.note(400, 0.36, 0.3, 'triangle', 0.1, 900);
+  },
+
+  // Ocean swell (ambient, every few seconds)
+  wave() {
+    if (!this.ready) return;
+    this.burst(3.2, 380, 0.6, 0.06, 0, 0, 1.2);
+  },
+
+  tick() {
+    if (!this.ready) return;
+    this.note(1200, 0, 0.06, 'triangle', 0.15);
+    this.burst(0.04, 2000, 6, 0.2);
+  },
+
+  // Ship's bell when the round ends: two strikes
+  timeUp() {
+    if (!this.ready) return;
+    for (const w of [0, 0.55]) {
+      this.note(523.25, w, 2.4, 'sine', 0.22);
+      this.note(523.25 * 2.4, w, 1.4, 'sine', 0.08);
+      this.note(523.25 * 3.0, w, 1.0, 'sine', 0.05);
+    }
+  },
+};
+
+/* =====================================================================
+   SIMULATION STATE
+   ===================================================================== */
+
+const S = {
+  balls: [], pending: [], fruits: [], cannons: [], fx: [],
+  flash: 0, shake: 0, banner: null,
+  slowmo: 0,            // real seconds of slow motion left
+  spawnT: 0,            // sim seconds until the next drop
+  overflowT: 0,         // sim seconds the chute has been blocked
+  resetT: 0,            // real seconds until auto-reset after OVERFLOW
+  merges: 0, highest: 1, record: loadRecord(),
+  tilt: 0, stormT: 0, stormPhase: 0,   // Rough Seas: gravity swings side to side
+  seaKingT: 0, wheelBase: 0,
+  nextEvent: 0, waveT: 0,
+  clock: ROUND_SECONDS, lastTick: 0, timeUp: false,
+  time: 0, acc: 0,
+};
+
+let nextBallId = 1;
+function makeBall(def, x, y, vx = 0, vy = 0) {
+  return { id: nextBallId++, def, x, y, vx, vy, r: def.r, m: def.r * def.r,
+           age: 0, pop: 0, dead: false, kicked: false };
+}
+
+// Clear the wheel (after an OVERFLOW the clock and round stats carry on).
+function resetSim() {
+  S.balls.length = 0; S.pending.length = 0; S.fruits.length = 0; S.cannons.length = 0;
+  S.fx.length = 0;
+  S.flash = 0; S.banner = null; S.slowmo = 0;
+  S.spawnT = 0.3; S.overflowT = 0; S.resetT = 0;
+}
+
+// Fresh round: clear everything and restart the clock and events.
+function startRound() {
+  resetSim();
+  S.merges = 0;
+  S.highest = 1;
+  S.tilt = 0; S.stormT = 0; S.seaKingT = 0;
+  S.nextEvent = 0;
+  S.clock = Number(params.get('seconds')) || ROUND_SECONDS;   // ?seconds=10 for quick tests
+  S.lastTick = 0;
+  S.timeUp = false;
+  S.acc = 0;
+}
+
+function overlapsAny(x, y, r) {
+  return S.balls.some(b => (b.x - x) ** 2 + (b.y - y) ** 2 < (b.r + r) ** 2);
+}
+
+// Drop a Chopper into the top of the chute.
+function spawnFromChute() {
+  const x = L.cx + rand(-1, 1) * (L.hw - START.r - 1);
+  const y = L.chuteTop + START.r + 2;
+  if (overlapsAny(x, y, START.r)) return;            // chute is clogged
+  S.balls.push(makeBall(START, x, y, rand(-40, 40), rand(20, 80)));
+}
+
+// Drop a Chopper wherever the user tapped.
+function spawnAt(x, y) {
+  const b = makeBall(START, x, y, rand(-60, 60), rand(-30, 30));
+  b.kicked = true;
+  S.balls.push(b);
+}
+
+/* =====================================================================
+   PHYSICS
+   ===================================================================== */
+
+const STEP = 1 / 240;   // fixed physics step (4 substeps per 60fps frame)
+
+// Circle vs line segment (the chute walls and the gap corners).
+function collideSegment(b, x1, y1, x2, y2, e) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const t = clamp(((b.x - x1) * dx + (b.y - y1) * dy) / (dx * dx + dy * dy), 0, 1);
+  let nx = b.x - (x1 + dx * t), ny = b.y - (y1 + dy * t);
+  const d2 = nx * nx + ny * ny;
+  if (d2 >= b.r * b.r || d2 === 0) return;
+  const d = Math.sqrt(d2);
+  nx /= d; ny /= d;
+  b.x += nx * (b.r - d);
+  b.y += ny * (b.r - d);
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn < 0) { b.vx -= (1 + e) * vn * nx; b.vy -= (1 + e) * vn * ny; }
+}
+
+function collideWalls(b, e, knock) {
+  collideSegment(b, L.cx - L.hw, L.chuteTop - 60, L.cx - L.hw, L.gapY, e);
+  collideSegment(b, L.cx + L.hw, L.chuteTop - 60, L.cx + L.hw, L.gapY, e);
+
+  const dx = b.x - L.cx, dy = b.y - L.cy;
+  const inGap = Math.abs(dx) < L.hw && dy < 0;     // lined up with the chute opening
+  const d = Math.hypot(dx, dy);
+  if (!inGap && d > L.R - b.r) {
+    const nx = dx / d, ny = dy / d;
+    b.x = L.cx + nx * (L.R - b.r);
+    b.y = L.cy + ny * (L.R - b.r);
+    const vn = b.vx * nx + b.vy * ny;
+    if (vn > 0) {
+      b.vx -= (1 + e) * vn * nx;
+      b.vy -= (1 + e) * vn * ny;
+      const tx = -ny, ty = nx, vt = b.vx * tx + b.vy * ty;   // a touch of friction
+      b.vx -= vt * 0.02 * tx;
+      b.vy -= vt * 0.02 * ty;
+      if (knock && vn > 140) Sound.blip(Math.atan2(dy, dx), Math.min(1, vn / 900));
+    }
+  }
+  if (inGap && b.y - b.r < L.chuteTop - 40) {        // lid above the chute
+    b.y = L.chuteTop - 40 + b.r;
+    if (b.vy < 0) b.vy *= -0.5;
+  }
+}
+
+// Mass-weighted circle collision. Returns true if they touched.
+function resolve(a, b, e) {
+  const dx = b.x - a.x, dy = b.y - a.y, rs = a.r + b.r, d2 = dx * dx + dy * dy;
+  if (d2 >= rs * rs) return false;
+  const d = Math.sqrt(d2) || 0.001, nx = dx / d, ny = dy / d, overlap = rs - d;
+  const inv = 1 / (a.m + b.m);
+  a.x -= nx * overlap * b.m * inv; a.y -= ny * overlap * b.m * inv;
+  b.x += nx * overlap * a.m * inv; b.y += ny * overlap * a.m * inv;
+  const rv = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+  if (rv < 0) {
+    const j = -(1 + e) * rv / (1 / a.m + 1 / b.m);
+    a.vx -= j / a.m * nx; a.vy -= j / a.m * ny;
+    b.vx += j / b.m * nx; b.vy += j / b.m * ny;
+  }
+  return true;
+}
+
+function step(dt) {
+  const G = Settings.gravity, e = Settings.bounce;
+  const gx = Math.sin(S.tilt) * G, gy = Math.cos(S.tilt) * G;   // Rough Seas tilts gravity
+  const balls = S.balls;
+
+  for (const b of balls) {
+    b.vx += gx * dt; b.vy += gy * dt;
+    b.vx *= 0.9995; b.vy *= 0.9995;
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    b.age += dt;
+    // Random sideways kick as a ball leaves the chute keeps things chaotic
+    if (!b.kicked && b.y > L.gapY + b.r) { b.kicked = true; b.vx += rand(-90, 90); }
+  }
+  for (const o of [...S.fruits, ...S.cannons]) {
+    o.vx += gx * dt; o.vy += gy * dt;
+    o.vx *= 0.999; o.vy *= 0.999;
+    o.x += o.vx * dt; o.y += o.vy * dt;
+  }
+
+  // Badge vs badge: merge the same pirate, otherwise bounce
+  const n = balls.length, eb = e * 0.85;
+  for (let i = 0; i < n; i++) {
+    const a = balls[i];
+    if (a.dead) continue;
+    for (let j = i + 1; j < n; j++) {
+      const b = balls[j];
+      if (b.dead) continue;
+      const dx = b.x - a.x, dy = b.y - a.y, d2 = dx * dx + dy * dy, rs = a.r + b.r;
+      const twins = a.def === b.def && a.def.next !== null;
+      if (d2 >= rs * rs) {
+        if (twins && TUNING.attract && d2 < (rs * 2.5) ** 2) {   // crewmates pull together
+          const k = TUNING.attract * dt / Math.sqrt(d2);
+          a.vx += dx * k; a.vy += dy * k;
+          b.vx -= dx * k; b.vy -= dy * k;
+        }
+        continue;
+      }
+      if (twins) { merge(a, b); break; }
+      resolve(a, b, eb);
+    }
+  }
+
+  // Cannonballs are heavy and shove badges around; Devil Fruits power up whoever touches them
+  for (const c of S.cannons) for (const b of balls) if (!b.dead) resolve(c, b, 0.6);
+  for (const f of S.fruits) {
+    if (f.eaten) continue;
+    for (const b of balls) {
+      if (!b.dead && (b.x - f.x) ** 2 + (b.y - f.y) ** 2 < (b.r + f.r) ** 2) { eatFruit(f, b); break; }
+    }
+  }
+
+  // Walls last so nothing ends a step outside the wheel
+  for (const b of balls) if (!b.dead) collideWalls(b, e, true);
+  for (const o of [...S.fruits, ...S.cannons]) collideWalls(o, 0.6, false);
+
+  // Apply merges
+  if (S.pending.length || balls.some(b => b.dead)) {
+    S.balls = balls.filter(b => !b.dead).concat(S.pending);
+    S.pending.length = 0;
+  }
+  S.fruits = S.fruits.filter(f => !f.eaten);
+}
+
+/* =====================================================================
+   MERGES, EVENTS & CELEBRATIONS
+   ===================================================================== */
+
+function merge(a, b) {
+  a.dead = b.dead = true;
+  const def = TIERS[a.def.next];
+  const x = (a.x + b.x) / 2, y = (a.y + b.y) / 2;
+  const nb = makeBall(def, x, y, (a.vx + b.vx) / 2, (a.vy + b.vy) / 2);
+  nb.kicked = true;
+  S.pending.push(nb);
+  S.merges++;
+  celebrate(def, x, y);
+}
+
+function eatFruit(f, b) {
+  f.eaten = true;
+  addRing(f.x, f.y, f.r, 70, '#C77DFF', 0.7, 8);
+  Sound.fruit();
+  if (b.def.next === null) return;
+  const def = TIERS[b.def.next];
+  b.def = def; b.r = def.r; b.m = def.r * def.r; b.pop = 0;
+  addFloat(b.x, b.y - b.r - 44, `${f.name} NO MI!`, '#E6C7FF', 22, 1.8, `${def.name} powered up!`);
+  celebrate(def, b.x, b.y);
+}
+
+function celebrate(def, x, y) {
+  const r = def.r;
+  S.fx.push({ kind: 'flash', x, y, r: r * 1.6, life: 0.16, max: 0.16 });
+  addRing(x, y, r, r * 2.3, GOLD, 0.5, 5);
+  addCoins(x, y, 5);
+  Sound.coin();
+
+  // Text, bigger bursts and fanfares only for a pirate reached for the first time
+  if (def.tier > S.highest) {
+    S.highest = def.tier;
+    const big = def.emperor || def.king;
+    addRing(x, y, r, r * (big ? 5 : 3.2), def.color, big ? 1.0 : 0.7, big ? 10 : 7);
+    addCoins(x, y, big ? 30 : 14);
+    addFloat(x, y - r - 12, def.king ? 'PIRATE KING!' : def.emperor ? 'EMPEROR!' : 'NEW BOUNTY!',
+             big ? GOLD : CREAM, big ? 32 : 24, 1.5, `${def.name} · ${fmtShort(def.bounty)}`);
+    S.flash = Math.max(S.flash, big ? 0.4 : 0.15);
+    if (big) Sound.emperor(); else Sound.newPirate();
+  }
+
+  // New all-time record far enough up the ladder: the big moment
+  if (def.tier > S.record) {
+    S.record = def.tier;
+    saveRecord(S.record);
+    if (def.tier >= RECORD_MIN_TIER) {
+      S.slowmo = 2.0;                                // 30% speed for 2 real seconds
+      S.banner = { text: 'NEW RECORD!', sub: `${def.full} · ${fmtFull(def.bounty)}`, life: 2.4, max: 2.4 };
+      Sound.emperor();
+    }
+  }
+}
+
+function runEvent(kind) {
+  if (kind === 'storm') {
+    S.stormT = 5; S.stormPhase = 0;
+    S.flash = 0.45;
+    S.banner = { text: 'ROUGH SEAS!', sub: 'The ship is rocking!', life: 1.8, max: 1.8 };
+    Sound.storm();
+  } else if (kind === 'fruit') {
+    S.fruits.push({ x: L.cx + rand(-70, 70), y: L.cy - L.R * 0.45, vx: rand(-60, 60), vy: 0,
+                    r: 12, m: 144, name: pick(FRUITS), born: S.time, eaten: false });
+    S.banner = { text: 'DEVIL FRUIT!', sub: 'Whoever touches it powers up!', life: 1.8, max: 1.8 };
+    Sound.fruit();
+  } else if (kind === 'buster') {
+    for (let i = 0; i < 3; i++) {
+      S.cannons.push({ x: L.cx + (i - 1) * 55, y: L.cy - L.R + 45 + rand(0, 20), vx: rand(-80, 80), vy: 150,
+                       r: 13, m: 13 * 13 * 8, fuse: 3 + i * 0.35 });
+    }
+    S.banner = { text: 'BUSTER CALL!', sub: 'Marine cannonballs incoming!', life: 1.8, max: 1.8 };
+    Sound.cannonFire();
+  } else if (kind === 'seaking') {
+    S.seaKingT = 3;
+    for (const b of S.balls) { b.vy -= rand(350, 650); b.vx += rand(-220, 220); }
+    S.shake = 14;
+    S.banner = { text: 'SEA KING!', sub: 'Something huge is in the water…', life: 1.8, max: 1.8 };
+    Sound.roar();
+  }
+}
+
+// A cannonball's fuse runs out: blast everything nearby outward.
+function explode(c) {
+  for (const o of [...S.balls, ...S.fruits]) {
+    const dx = o.x - c.x, dy = o.y - c.y, d = Math.hypot(dx, dy) || 1;
+    if (d > 130) continue;
+    const k = 900 * (1 - d / 130);
+    o.vx += dx / d * k; o.vy += dy / d * k;
+  }
+  addRing(c.x, c.y, 10, 130, '#FF8A1F', 0.6, 12);
+  addRing(c.x, c.y, 10, 90, INK, 0.45, 6);
+  addSparks(c.x, c.y, 26, ['#FF8A1F', '#FFD54A', '#555555', INK], 480);
+  addFloat(c.x, c.y - 20, 'BOOM!', '#FF8A1F', 30, 0.9);
+  S.shake = Math.max(S.shake, 14);
+  S.flash = Math.max(S.flash, 0.2);
+  Sound.cannon();
+}
+
+function triggerOverflow() {
+  S.resetT = 2.0;
+  const best = TIERS[S.highest - 1];
+  S.banner = { text: 'OVERFLOW!', sub: `made it to ${best.name} · ${fmtShort(best.bounty)}`, life: 2.0, max: 2.0 };
+  S.flash = 0.4;
+  Sound.cannon();
+}
+
+function endRound() {
+  S.clock = 0;
+  S.timeUp = true;
+  S.slowmo = 0;
+  S.tilt = 0;
+  const best = TIERS[S.highest - 1];
+  S.banner = { text: fmtFull(best.bounty), sub: `MAX BOUNTY · ${best.full.toUpperCase()}`, life: 3.2, max: 3.2, big: true };
+  S.flash = 0.35;
+  Sound.timeUp();
+}
+
+/* =====================================================================
+   EFFECTS
+   ===================================================================== */
+
+function addRing(x, y, r0, r1, color, life, width) {
+  S.fx.push({ kind: 'ring', x, y, r0, r1, color, life, max: life, width });
+}
+function addSparks(x, y, count, colors, speed) {
+  for (let i = 0; i < count; i++) {
+    const a = rand(0, TAU), s = rand(speed * 0.3, speed), life = rand(0.4, 0.9);
+    S.fx.push({ kind: 'spark', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                color: pick(colors), size: rand(1.5, 3.5), life, max: life });
+  }
+}
+// Gold coins that spray out and tumble down.
+function addCoins(x, y, count) {
+  if (S.fx.length > 450) return;
+  for (let i = 0; i < count; i++) {
+    const a = rand(-Math.PI * 0.95, -Math.PI * 0.05), s = rand(120, 380), life = rand(0.6, 1.0);
+    S.fx.push({ kind: 'coin', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, spin: rand(8, 16),
+                life, max: life, size: rand(3, 5) });
+  }
+}
+function addFloat(x, y, text, color, size, life, sub) {
+  S.fx.push({ kind: 'float', x, y, text, color, size, life, max: life, sub });
+}
+
+/* =====================================================================
+   UPDATE
+   ===================================================================== */
+
+function update(rdt) {
+  S.time += rdt;
+
+  // Real-time timers (effects stay readable during slow-mo)
+  S.slowmo = Math.max(0, S.slowmo - rdt);
+  S.flash = Math.max(0, S.flash - rdt * 2.2);
+  S.shake = Math.max(0, S.shake - rdt * 40);
+  S.seaKingT = Math.max(0, S.seaKingT - rdt);
+  if (S.banner && (S.banner.life -= rdt) <= 0) S.banner = null;
+
+  for (const f of S.fx) {
+    f.life -= rdt;
+    if (f.kind === 'spark') {
+      f.x += f.vx * rdt; f.y += f.vy * rdt;
+      f.vx *= 0.94; f.vy *= 0.94;
+    } else if (f.kind === 'coin') {
+      f.vy += 900 * rdt;
+      f.x += f.vx * rdt; f.y += f.vy * rdt;
+    }
+  }
+  S.fx = S.fx.filter(f => f.life > 0);
+  for (const b of S.balls) b.pop = Math.min(1, b.pop + rdt / 0.28);
+  S.wheelBase += 0.12 * rdt;
+
+  // Round clock (wall-clock time, so the video is exactly 2:00)
+  if (!S.timeUp) {
+    S.clock -= rdt;
+    const whole = Math.ceil(S.clock);
+    if (whole !== S.lastTick && whole <= 5 && whole > 0) Sound.tick();
+    S.lastTick = whole;
+    if (S.clock <= 0) endRound();
+    S.waveT += rdt;                                   // ocean ambience
+    if (S.waveT >= 3.6) { S.waveT -= 3.6; Sound.wave(); }
+  }
+  if (S.timeUp) { Recorder.tick(rdt); return; }   // frozen: nothing moves
+
+  const sdt = rdt * (S.slowmo > 0 ? 0.3 : 1);
+
+  // Sea events on schedule
+  while (S.nextEvent < EVENTS.length && elapsed() >= EVENTS[S.nextEvent].at) runEvent(EVENTS[S.nextEvent++].kind);
+
+  // Rough Seas: gravity swings left and right, then settles
+  if (S.stormT > 0) {
+    S.stormT -= sdt;
+    S.stormPhase += sdt * 2.4;
+    S.tilt = 0.5 * Math.sin(S.stormPhase) * Math.min(1, S.stormT / 0.6);
+  } else {
+    S.tilt *= Math.pow(0.02, sdt);
+  }
+
+  // Cannonball fuses, expired Devil Fruits
+  for (const c of S.cannons) {
+    c.fuse -= sdt;
+    if (c.fuse <= 0) { c.gone = true; explode(c); }
+  }
+  S.cannons = S.cannons.filter(c => !c.gone);
+  for (const f of S.fruits) {
+    if (S.time - f.born > 10) { f.eaten = true; addRing(f.x, f.y, f.r, 40, '#C77DFF', 0.5, 4); }
+  }
+
+  if (S.resetT > 0) {
+    S.resetT -= rdt;
+    if (S.resetT <= 0) resetSim();
+  }
+
+  // Dropping Choppers down the chute
+  if (S.resetT <= 0) {
+    S.spawnT -= sdt;
+    if (S.spawnT <= 0) {
+      S.spawnT += Settings.spawnInterval;
+      spawnFromChute();
+    }
+  }
+
+  // Fixed-step physics
+  S.acc += sdt;
+  let steps = 0;
+  while (S.acc >= STEP && steps < 10) { step(STEP); S.acc -= STEP; steps++; }
+  if (steps === 10) S.acc = 0;
+
+  // Overflow: a settled badge stuck in the chute (above the wheel) for 3s
+  if (S.resetT <= 0) {
+    const topY = L.cy - L.R;
+    const blocked = S.balls.some(b => b.age > 1.5 && b.y < topY);
+    S.overflowT = blocked ? S.overflowT + sdt : 0;
+    if (S.overflowT > 3) triggerOverflow();
+  }
+}
+
+/* =====================================================================
+   FACES: every pirate is drawn in code (no image files). Drawn in "unit
+   space": the head is a circle of radius 1 centered at (0, 0); line widths
+   are in the same units. getSprite() scales each face into its badge.
+   ===================================================================== */
+
+function ink(g, fill, w = 0.1) {
+  g.fillStyle = fill;
+  g.fill();
+  g.lineWidth = w;
+  g.strokeStyle = INK;
+  g.stroke();
+}
+function ell(g, x, y, rx, ry, rot = 0) {
+  g.beginPath(); g.ellipse(x, y, rx, ry, rot, 0, TAU);
+}
+// Top half of an ellipse (hair, hats, bandanas).
+function topHalf(g, x, y, rx, ry) {
+  g.beginPath(); g.ellipse(x, y, rx, ry, 0, Math.PI, TAU); g.closePath();
+}
+function seg(g, x1, y1, x2, y2, w, color = INK) {
+  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2);
+  g.lineWidth = w; g.lineCap = 'round'; g.strokeStyle = color; g.stroke();
+}
+// Tapered spike (hair, horn) growing out of the head. ang in degrees (270 = up).
+function spikeU(g, ang, len, half, bend = 0) {
+  const p = (deg, d) => [Math.cos(deg * DEG) * d, Math.sin(deg * DEG) * d];
+  const [x0, y0] = p(ang - half, 0.78), [x1, y1] = p(ang + half, 0.78), [tx, ty] = p(ang + bend, len);
+  const mid = (0.78 + len) * 0.55;
+  const [k0x, k0y] = p(ang - half * 0.4 + bend * 0.5, mid), [k1x, k1y] = p(ang + half * 0.4 + bend * 0.5, mid);
+  g.beginPath();
+  g.moveTo(x0, y0);
+  g.quadraticCurveTo(k0x, k0y, tx, ty);
+  g.quadraticCurveTo(k1x, k1y, x1, y1);
+  g.closePath();
+}
+
+function headU(g, skin, rx = 0.9, ry = 1) { ell(g, 0, 0, rx, ry); ink(g, skin); }
+
+// Simple manga eyes: dark ovals with a glint, or whites + colored iris (+ lashes).
+function eyesU(g, { y = 0.05, gap = 0.36, rx = 0.13, ry = 0.17, sclera = false, iris = INK, lashes = false } = {}) {
+  for (const s of [-1, 1]) {
+    const x = s * gap;
+    if (sclera) {
+      ell(g, x, y, rx * 1.3, ry * 1.1); ink(g, '#FFFFFF', 0.06);
+      ell(g, x, y + 0.02, rx * 0.8, ry * 0.85); g.fillStyle = iris; g.fill();
+      ell(g, x, y + 0.02, rx * 0.4, ry * 0.45); g.fillStyle = INK; g.fill();
+    } else {
+      ell(g, x, y, rx, ry); g.fillStyle = INK; g.fill();
+    }
+    ell(g, x - rx * 0.3, y - ry * 0.35, rx * 0.3, ry * 0.25); g.fillStyle = '#FFFFFF'; g.fill();
+    if (lashes) seg(g, x - s * rx * 1.4, y - ry * 1.05, x + s * rx * 1.3, y - ry * 1.3, 0.08);
+  }
+}
+function browsU(g, { y = -0.22, angry = false, w = 0.1 } = {}) {
+  for (const s of [-1, 1]) seg(g, s * 0.14, y + (angry ? 0.07 : 0), s * 0.52, y - 0.03, w);
+}
+function mouthU(g, kind = 'smile', y = 0) {
+  if (kind === 'smile') {
+    g.beginPath(); g.arc(0, 0.28 + y, 0.28, 0.2 * Math.PI, 0.8 * Math.PI);
+    g.lineWidth = 0.08; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+  } else if (kind === 'grin') {                         // big open grin with teeth
+    g.beginPath(); g.moveTo(-0.45, 0.35 + y); g.quadraticCurveTo(0, 0.95 + y, 0.45, 0.35 + y); g.closePath();
+    ink(g, '#8A1F2B', 0.08);
+    g.beginPath(); g.moveTo(-0.42, 0.37 + y); g.lineTo(0.42, 0.37 + y); g.lineTo(0.34, 0.48 + y); g.lineTo(-0.34, 0.48 + y);
+    g.closePath(); g.fillStyle = '#FFFFFF'; g.fill();
+  } else if (kind === 'smirk') {
+    g.beginPath(); g.moveTo(-0.22, 0.5 + y); g.quadraticCurveTo(0.05, 0.57 + y, 0.32, 0.42 + y);
+    g.lineWidth = 0.08; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+  } else {
+    seg(g, -0.2, 0.5 + y, 0.2, 0.48 + y, 0.08);
+  }
+}
+
+const FACES = {
+  chopper(g) {
+    for (const s of [-1, 1]) {                        // antlers
+      g.beginPath();
+      g.moveTo(s * 0.5, -0.85); g.lineTo(s * 1.1, -1.4);
+      g.moveTo(s * 0.88, -1.17); g.lineTo(s * 1.22, -1.02);
+      g.moveTo(s * 0.74, -1.04); g.lineTo(s * 0.7, -1.42);
+      g.lineCap = 'round'; g.lineWidth = 0.26; g.strokeStyle = INK; g.stroke();
+      g.lineWidth = 0.14; g.strokeStyle = '#A8743A'; g.stroke();
+    }
+    headU(g, '#B97A3E', 0.95, 0.9);
+    ell(g, 0, 0.4, 0.55, 0.36); ink(g, '#F0D2A8');
+    eyesU(g, { y: 0.0, gap: 0.38, rx: 0.15, ry: 0.19 });
+    ell(g, 0, 0.24, 0.17, 0.12); ink(g, '#3D7BFF', 0.07);   // blue nose
+    g.beginPath(); g.arc(0, 0.44, 0.14, 0.15 * Math.PI, 0.85 * Math.PI);
+    g.lineWidth = 0.07; g.strokeStyle = INK; g.stroke();
+    ell(g, 0, -0.62, 1.1, 0.24); ink(g, '#FF7FB0');          // pink hat
+    g.beginPath();
+    g.moveTo(-0.62, -0.66); g.lineTo(-0.55, -1.4); g.quadraticCurveTo(0, -1.58, 0.55, -1.4); g.lineTo(0.62, -0.66);
+    g.closePath(); ink(g, '#FF7FB0');
+    for (const [x1, y1, x2, y2] of [[-0.24, -1.24, 0.24, -0.86], [0.24, -1.24, -0.24, -0.86]]) {   // white X
+      seg(g, x1, y1, x2, y2, 0.24); seg(g, x1, y1, x2, y2, 0.13, '#FFFFFF');
+    }
+  },
+  nami(g) {
+    ell(g, 0, 0.45, 1.2, 1.15); ink(g, '#FF8A1F');           // long hair behind
+    headU(g, '#FFD9B3');
+    topHalf(g, 0, -0.22, 0.98, 0.85); ink(g, '#FF8A1F');
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.9, -0.25); g.lineTo(s * 0.55, 0.15); g.lineTo(s * 0.45, -0.25); g.closePath();
+      ink(g, '#FF8A1F');
+    }
+    eyesU(g, { y: 0.1, gap: 0.34, sclera: true, iris: '#8A5A2B', lashes: true });
+    mouthU(g, 'smile', 0.05);
+  },
+  brook(g) {
+    for (let i = 0; i < 14; i++) {                         // afro
+      const a = i / 14 * TAU;
+      ell(g, Math.cos(a) * 0.95, -0.55 + Math.sin(a) * 0.72, 0.42, 0.42); ink(g, '#1A1A1A', 0.08);
+    }
+    ell(g, 0, -0.55, 1.05, 0.8); g.fillStyle = '#1A1A1A'; g.fill();
+    headU(g, '#F4F1E8', 0.8, 0.92);                       // skull
+    for (const s of [-1, 1]) { ell(g, s * 0.32, 0.0, 0.2, 0.24); g.fillStyle = INK; g.fill(); }
+    g.beginPath(); g.moveTo(-0.08, 0.3); g.lineTo(0.08, 0.3); g.lineTo(0, 0.42); g.closePath(); g.fillStyle = INK; g.fill();
+    g.beginPath(); g.rect(-0.36, 0.52, 0.72, 0.22); ink(g, '#FFFFFF', 0.06);
+    for (const x of [-0.18, 0, 0.18]) seg(g, x, 0.52, x, 0.74, 0.05);
+    seg(g, -0.36, 0.63, 0.36, 0.63, 0.05);
+  },
+  franky(g) {
+    headU(g, '#E8B98F', 0.92, 1);
+    for (const s of [-1, 1]) { roundRect(g, s * 0.38 - 0.24, -0.08, 0.48, 0.26, 0.08); ink(g, '#1A1A1A', 0.07); }
+    seg(g, -0.14, 0.0, 0.14, 0.0, 0.08);
+    g.beginPath();                                         // blue pompadour
+    g.moveTo(-0.85, -0.35); g.quadraticCurveTo(-0.9, -1.25, 0.1, -1.35);
+    g.quadraticCurveTo(1.25, -1.4, 1.1, -0.7); g.quadraticCurveTo(0.6, -0.95, 0.85, -0.35);
+    g.quadraticCurveTo(0, -0.6, -0.85, -0.35); g.closePath();
+    ink(g, '#5EC8F2');
+    mouthU(g, 'grin', 0.05);
+  },
+  usopp(g) {
+    for (let i = 0; i <= 8; i++) {                         // curly hair
+      const a = Math.PI + i / 8 * Math.PI;
+      ell(g, Math.cos(a) * 0.85, -0.2 + Math.sin(a) * 0.85, 0.33, 0.33); ink(g, '#1A1A1A', 0.08);
+    }
+    headU(g, '#A0703F');
+    seg(g, -0.9, -0.45, 0.9, -0.45, 0.14, '#5C3A1A');       // goggles on the forehead
+    for (const s of [-1, 1]) { ell(g, s * 0.32, -0.48, 0.2, 0.18); ink(g, '#FFD54A', 0.08); }
+    eyesU(g, { y: 0.1, gap: 0.34 });
+    g.beginPath();                                         // the long nose
+    g.moveTo(0.02, 0.17); g.lineTo(1.2, 0.22); g.arc(1.2, 0.3, 0.08, -Math.PI / 2, Math.PI / 2); g.lineTo(0.02, 0.4);
+    g.closePath(); ink(g, '#A0703F', 0.08);
+    mouthU(g, 'grin', 0.18);
+  },
+  robin(g) {
+    g.beginPath(); g.moveTo(-1.0, -0.3); g.lineTo(-1.05, 1.15); g.lineTo(1.05, 1.15); g.lineTo(1.0, -0.3); g.closePath();
+    ink(g, '#1C1C2E');                                     // long straight hair
+    headU(g, '#FFD9B3');
+    topHalf(g, 0, -0.2, 0.98, 0.85); ink(g, '#1C1C2E');
+    g.beginPath(); g.rect(-0.86, -0.36, 1.72, 0.2); g.fillStyle = '#1C1C2E'; g.fill();   // straight bangs
+    for (const s of [-1, 1]) { g.beginPath(); g.rect(s > 0 ? 0.72 : -0.96, -0.3, 0.24, 0.95); g.fillStyle = '#1C1C2E'; g.fill(); }
+    eyesU(g, { y: 0.12, gap: 0.33, sclera: true, iris: '#2E6BD9', lashes: true });
+    mouthU(g, 'smile', 0.06);
+  },
+  sanji(g) {
+    headU(g, '#FFD9B3');
+    topHalf(g, 0, -0.2, 0.98, 0.85); ink(g, '#FFD84A');
+    ell(g, 0.35, 0.08, 0.13, 0.17); g.fillStyle = INK; g.fill();          // the visible eye
+    ell(g, 0.31, 0.02, 0.04, 0.05); g.fillStyle = '#FFFFFF'; g.fill();
+    g.beginPath();                                                       // curly eyebrow
+    for (let i = 0; i <= 30; i++) {
+      const t = i / 30, a = t * TAU * 1.4, rr = 0.03 + t * 0.12;
+      g.lineTo(0.3 + Math.cos(a) * rr, -0.2 + Math.sin(a) * rr);
+    }
+    g.lineTo(0.55, -0.26);
+    g.lineWidth = 0.06; g.strokeStyle = INK; g.stroke();
+    g.beginPath();                                                       // hair over one eye
+    g.moveTo(-0.95, -0.3); g.quadraticCurveTo(-0.2, -0.55, 0.06, -0.3);
+    g.quadraticCurveTo(-0.08, 0.25, -0.55, 0.45); g.quadraticCurveTo(-0.95, 0.2, -0.95, -0.3);
+    g.closePath(); ink(g, '#FFD84A');
+    g.beginPath(); g.moveTo(-0.08, 0.72); g.lineTo(0.08, 0.72); g.lineTo(0, 0.88); g.closePath(); g.fillStyle = '#D9A92A'; g.fill();
+    mouthU(g, 'smirk', 0.02);
+    seg(g, 0.12, 0.5, 0.72, 0.63, 0.13);                                 // cigarette
+    seg(g, 0.12, 0.5, 0.72, 0.63, 0.07, '#FFFFFF');
+    ell(g, 0.74, 0.635, 0.05, 0.05); g.fillStyle = '#FF6B35'; g.fill();
+  },
+  jinbe(g) {
+    headU(g, '#5C8FC0', 1.0, 0.95);
+    topHalf(g, 0, -0.3, 0.95, 0.68); ink(g, '#1A1A1A');
+    browsU(g, { y: -0.12, angry: true, w: 0.14 });
+    eyesU(g, { y: 0.06, gap: 0.34, rx: 0.1, ry: 0.11 });
+    ell(g, 0, 0.5, 0.45, 0.2); ink(g, '#8FB3D6');                       // big lips
+    for (const s of [-1, 1]) {                                           // tusks
+      g.beginPath(); g.moveTo(s * 0.24, 0.5); g.lineTo(s * 0.32, 0.18); g.lineTo(s * 0.4, 0.48); g.closePath();
+      ink(g, '#FFFFFF', 0.06);
+    }
+  },
+  zoro(g) {
+    for (const a of [200, 222, 245, 270, 295, 318, 340]) { spikeU(g, a, 1.18, 14); ink(g, '#3E9B4F'); }
+    headU(g, '#F2C9A0');
+    topHalf(g, 0, -0.32, 0.95, 0.7); ink(g, '#3E9B4F');
+    ell(g, -0.95, 0.12, 0.1, 0.16); ink(g, '#F2C9A0', 0.06);            // ear with three gold earrings
+    for (let k = 0; k < 3; k++) seg(g, -1.0 + k * 0.06, 0.22, -1.0 + k * 0.06, 0.44, 0.07, '#E8B931');
+    seg(g, -0.5, 0.06, -0.2, 0.06, 0.08);                               // scarred eye, closed
+    seg(g, -0.36, -0.36, -0.32, 0.42, 0.06, '#9B3B2E');
+    ell(g, 0.35, 0.06, 0.12, 0.14); g.fillStyle = INK; g.fill();
+    ell(g, 0.31, 0.01, 0.035, 0.045); g.fillStyle = '#FFFFFF'; g.fill();
+    browsU(g, { y: -0.18, angry: true, w: 0.12 });
+    mouthU(g, 'flat');
+  },
+  luffy(g) {
+    for (const a of [150, 170, 190, 350, 10, 30]) { spikeU(g, a, 1.15, 12); ink(g, '#1A1A1A'); }
+    headU(g, '#FFD9B3');
+    topHalf(g, 0, -0.3, 0.97, 0.6); ink(g, '#1A1A1A');
+    ell(g, 0, -0.62, 1.38, 0.3); ink(g, '#F2C14E');                      // straw hat
+    topHalf(g, 0, -0.68, 0.8, 0.72); ink(g, '#F2C14E');
+    g.beginPath(); g.rect(-0.8, -0.86, 1.6, 0.18); ink(g, '#D7262D', 0.07);
+    eyesU(g, { y: 0.1, gap: 0.34 });
+    g.beginPath(); g.arc(-0.34, 0.33, 0.13, 0.2 * Math.PI, 0.8 * Math.PI);   // scar under the eye
+    g.lineWidth = 0.06; g.strokeStyle = INK; g.stroke();
+    seg(g, -0.4, 0.4, -0.38, 0.49, 0.04); seg(g, -0.28, 0.4, -0.3, 0.49, 0.04);
+    mouthU(g, 'grin', 0.05);
+  },
+  buggy(g) {
+    ell(g, 0, -0.1, 1.08, 1.08); ink(g, '#2E5BD8');
+    headU(g, '#F7F2EC');
+    topHalf(g, 0, -0.3, 0.95, 0.68); ink(g, '#2E5BD8');
+    eyesU(g, { y: 0.04, gap: 0.36 });
+    browsU(g, { y: -0.16, angry: true });
+    mouthU(g, 'grin', 0.12);
+    ell(g, 0, 0.22, 0.24, 0.22); ink(g, '#E8282B', 0.08);              // big red nose
+    ell(g, -0.07, 0.15, 0.07, 0.05); g.fillStyle = '#FFFFFF'; g.fill();
+  },
+  mihawk(g) {
+    headU(g, '#F2C9A0');
+    topHalf(g, 0, -0.3, 0.97, 0.6); ink(g, '#1A1A1A');
+    for (const s of [-1, 1]) {                                           // hawk eyes
+      ell(g, s * 0.34, 0.08, 0.15, 0.12); ink(g, '#FFC93C', 0.08);
+      ell(g, s * 0.34, 0.08, 0.05, 0.08); g.fillStyle = INK; g.fill();
+    }
+    browsU(g, { y: -0.12, angry: true, w: 0.1 });
+    g.beginPath();                                                       // thin mustache + beard
+    g.moveTo(0, 0.38); g.quadraticCurveTo(-0.3, 0.32, -0.45, 0.54);
+    g.moveTo(0, 0.38); g.quadraticCurveTo(0.3, 0.32, 0.45, 0.54);
+    g.lineWidth = 0.07; g.strokeStyle = INK; g.stroke();
+    seg(g, 0, 0.62, 0, 0.86, 0.08);
+    ell(g, 0, -0.62, 1.55, 0.26); ink(g, '#1A1A1A');                    // big hat with a plume
+    topHalf(g, 0, -0.66, 0.85, 0.62); ink(g, '#1A1A1A');
+    ell(g, 0.82, -1.0, 0.52, 0.16, -0.5); ink(g, '#F4F1E8', 0.06);
+  },
+  blackbeard(g) {
+    headU(g, '#C98E5B');
+    topHalf(g, 0, -0.32, 0.98, 0.72); ink(g, '#C8102E');                // bandana
+    ell(g, 0.95, -0.45, 0.18, 0.12); ink(g, '#C8102E', 0.06);
+    eyesU(g, { y: 0.02, gap: 0.34, rx: 0.11, ry: 0.13 });
+    browsU(g, { y: -0.16, angry: false, w: 0.11 });
+    g.beginPath();                                                       // big black beard
+    g.moveTo(-0.88, 0.1); g.quadraticCurveTo(-0.95, 1.25, 0, 1.3); g.quadraticCurveTo(0.95, 1.25, 0.88, 0.1);
+    g.quadraticCurveTo(0.6, 0.45, 0, 0.42); g.quadraticCurveTo(-0.6, 0.45, -0.88, 0.1);
+    g.closePath(); ink(g, '#1A1A1A');
+    ell(g, 0, 0.62, 0.36, 0.17); ink(g, '#FFFFFF', 0.06);                 // grin with missing teeth
+    g.fillStyle = INK;
+    g.fillRect(-0.12, 0.5, 0.08, 0.15); g.fillRect(0.12, 0.52, 0.07, 0.13);
+    ell(g, 0, 0.25, 0.14, 0.1); ink(g, '#B5774A', 0.06);
+  },
+  shanks(g) {
+    for (const a of [150, 172, 196, 222, 248, 272, 298, 322, 346, 10, 30]) { spikeU(g, a, 1.18, 12); ink(g, '#C8102E'); }
+    headU(g, '#F2C9A0');
+    topHalf(g, 0, -0.3, 0.97, 0.66); ink(g, '#C8102E');
+    eyesU(g, { y: 0.08, gap: 0.34 });
+    for (const dx of [-0.08, 0, 0.08]) seg(g, -0.36 + dx, -0.28, -0.4 + dx, 0.38, 0.05, '#8B2E2E');   // three scars
+    g.beginPath(); g.arc(0, 0.55, 0.35, 0.15 * Math.PI, 0.85 * Math.PI);
+    g.lineWidth = 0.12; g.strokeStyle = 'rgba(139,46,46,0.6)'; g.stroke();
+    mouthU(g, 'smirk');
+  },
+  bigmom(g) {
+    for (let i = 0; i < 16; i++) {                                       // wild pink curls
+      const a = i / 16 * TAU;
+      ell(g, Math.cos(a) * 1.05, -0.1 + Math.sin(a) * 1.0, 0.42, 0.42); ink(g, '#FF8FC0', 0.08);
+    }
+    ell(g, 0, -0.1, 1.1, 1.05); g.fillStyle = '#FF8FC0'; g.fill();
+    headU(g, '#FFD9B3', 0.95, 0.95);
+    g.beginPath(); g.moveTo(-0.45, -0.92); g.quadraticCurveTo(0, -1.5, 0.45, -0.92); g.quadraticCurveTo(0, -1.08, -0.45, -0.92);
+    g.closePath(); ink(g, '#1A1A1A');                                    // tiny pirate hat
+    eyesU(g, { y: 0.0, gap: 0.36, sclera: true, iris: '#2B1A0E' });
+    g.beginPath(); g.moveTo(-0.5, 0.38); g.quadraticCurveTo(0, 0.95, 0.5, 0.38); g.closePath();
+    ink(g, '#E8282B', 0.08);
+    g.beginPath(); g.moveTo(-0.46, 0.4); g.lineTo(0.46, 0.4); g.lineTo(0.38, 0.5); g.lineTo(-0.38, 0.5); g.closePath();
+    g.fillStyle = '#FFFFFF'; g.fill();
+  },
+  kaido(g) {
+    g.beginPath(); g.moveTo(-0.95, -0.3); g.lineTo(-1.15, 1.2); g.lineTo(1.15, 1.2); g.lineTo(0.95, -0.3); g.closePath();
+    ink(g, '#1A1A1A');                                                   // long hair
+    for (const a of [236, 304]) { spikeU(g, a, 1.6, 9, (a - 270) * 0.3); ink(g, '#E8E2D0'); }   // horns
+    headU(g, '#D9A273');
+    topHalf(g, 0, -0.3, 0.97, 0.66); ink(g, '#1A1A1A');
+    browsU(g, { y: -0.14, angry: true, w: 0.15 });
+    eyesU(g, { y: 0.06, gap: 0.34, rx: 0.1, ry: 0.12 });
+    g.beginPath();                                                       // mustache + beard
+    g.moveTo(0, 0.36); g.quadraticCurveTo(-0.5, 0.35, -0.7, 0.78);
+    g.moveTo(0, 0.36); g.quadraticCurveTo(0.5, 0.35, 0.7, 0.78);
+    g.lineWidth = 0.1; g.strokeStyle = INK; g.stroke();
+    seg(g, 0, 0.62, 0, 1.05, 0.1);
+  },
+  whitebeard(g) {
+    headU(g, '#E3B07B');
+    topHalf(g, 0, -0.3, 0.98, 0.7); ink(g, '#1A1A1A');                  // black bandana
+    eyesU(g, { y: 0.02, gap: 0.34, rx: 0.11, ry: 0.12 });
+    browsU(g, { y: -0.15, angry: true, w: 0.12 });
+    g.beginPath();                                                       // the white crescent mustache
+    g.moveTo(-1.15, -0.25);
+    g.quadraticCurveTo(-0.65, 0.6, 0, 0.32);
+    g.quadraticCurveTo(0.65, 0.6, 1.15, -0.25);
+    g.quadraticCurveTo(0.6, 0.38, 0, 0.18);
+    g.quadraticCurveTo(-0.6, 0.38, -1.15, -0.25);
+    g.closePath(); ink(g, '#FFFFFF', 0.07);
+    seg(g, -0.15, 0.62, 0.15, 0.62, 0.07);
+  },
+  roger(g) {
+    headU(g, '#F2C9A0');
+    topHalf(g, 0, -0.3, 0.97, 0.62); ink(g, '#1A1A1A');
+    eyesU(g, { y: 0.08, gap: 0.34 });
+    browsU(g, { y: -0.14, angry: true, w: 0.1 });
+    g.beginPath();                                                       // curled handlebar mustache
+    g.moveTo(0, 0.3);
+    g.bezierCurveTo(-0.3, 0.2, -0.65, 0.5, -0.85, 0.1); g.bezierCurveTo(-0.75, 0.45, -0.35, 0.45, 0, 0.42);
+    g.bezierCurveTo(0.35, 0.45, 0.75, 0.45, 0.85, 0.1); g.bezierCurveTo(0.65, 0.5, 0.3, 0.2, 0, 0.3);
+    g.closePath(); ink(g, '#1A1A1A', 0.05);
+    mouthU(g, 'grin', 0.2);
+    ell(g, 0, -0.62, 1.45, 0.28); ink(g, '#B3122E');                    // captain's hat
+    topHalf(g, 0, -0.66, 0.85, 0.65); ink(g, '#B3122E');
+    ell(g, 0, -0.62, 1.38, 0.22); g.lineWidth = 0.06; g.strokeStyle = '#E8B931'; g.stroke();
+  },
+};
+
+/* =====================================================================
+   RENDERING
+   ===================================================================== */
+
+// Each pirate's WANTED badge is pre-rendered once per size: parchment disc,
+// face, "WANTED" + bounty (on bigger badges), thick border, gold rim for Emperors.
+const sprites = new Map();
+
+function getSprite(def, r) {
+  const key = `${def.id}|${r}`;
+  let s = sprites.get(key);
+  if (s) return s;
+
+  const size = (r + 6) * 2;
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  g.scale(c.width / size, c.height / size);
+  g.translate(size / 2, size / 2);
+
+  g.beginPath(); g.arc(0, 0, r, 0, TAU);
+  const paper = g.createRadialGradient(-r * 0.3, -r * 0.35, r * 0.1, 0, 0, r);
+  paper.addColorStop(0, '#FBEFCB');
+  paper.addColorStop(1, '#D9BC82');
+  g.fillStyle = paper;
+  g.fill();
+
+  const showText = r >= 30;
+  const hr = r * (showText ? 0.36 : 0.5);
+  const fy = showText ? r * 0.1 : r * 0.18;
+  g.save();
+  g.beginPath(); g.arc(0, 0, r * 0.86, 0, TAU); g.clip();
+  g.translate(0, fy);
+  g.scale(hr, hr);
+  g.lineJoin = 'round';
+  FACES[def.style](g);
+  g.restore();
+
+  if (showText) {
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillStyle = BROWN;
+    fitFont(g, 'WANTED', r * 1.0, r * 0.2, 700, POSTER);
+    g.fillText('WANTED', 0, -r * 0.66);
+    fitFont(g, fmtShort(def.bounty), r * 1.1, r * 0.2, 700, POSTER);
+    g.fillText(fmtShort(def.bounty), 0, r * 0.68);
+  }
+
+  g.beginPath(); g.arc(0, 0, r - 1, 0, TAU);
+  g.lineWidth = Math.max(2, r * 0.09);
+  g.strokeStyle = '#4A2C14';
+  g.stroke();
+  if (def.emperor || def.king) {
+    g.beginPath(); g.arc(0, 0, r - 1 - Math.max(2, r * 0.09), 0, TAU);
+    g.lineWidth = Math.max(1.5, r * 0.04);
+    g.strokeStyle = GOLD;
+    g.stroke();
+  }
+
+  s = { canvas: c, size };
+  sprites.set(key, s);
+  return s;
+}
+
+// Treasure-map parchment with a compass rose (rebuilt on resize).
+let backdrop = null;
+function buildBackdrop() {
+  backdrop = document.createElement('canvas');
+  backdrop.width = canvas.width;
+  backdrop.height = canvas.height;
+  const g = backdrop.getContext('2d');
+  g.scale(scale, scale);
+  g.fillStyle = PARCH;
+  g.fillRect(0, 0, LW, LH);
+
+  let seed = 7;                                         // fixed blotches, same every rebuild
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 170; i++) {
+    g.beginPath(); g.arc(rnd() * LW, rnd() * LH, 4 + rnd() * 26, 0, TAU);
+    g.fillStyle = `rgba(140,90,40,${0.03 + rnd() * 0.04})`;
+    g.fill();
+  }
+  g.strokeStyle = 'rgba(90,60,30,0.14)';                // map grid
+  g.lineWidth = 1;
+  g.setLineDash([6, 6]);
+  for (let x = 30; x < LW; x += 60) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, LH); g.stroke(); }
+  for (let y = 30; y < LH; y += 60) { g.beginPath(); g.moveTo(0, y); g.lineTo(LW, y); g.stroke(); }
+  g.setLineDash([]);
+  const v = g.createRadialGradient(LW / 2, LH / 2, LW * 0.35, LW / 2, LH / 2, LH * 0.62);   // burnt edges
+  v.addColorStop(0, 'rgba(80,45,15,0)');
+  v.addColorStop(1, 'rgba(80,45,15,0.5)');
+  g.fillStyle = v;
+  g.fillRect(0, 0, LW, LH);
+
+  // Compass rose, top-right
+  const cx = LW - 56, cy = L.panelTop + 44, R = 26;
+  g.strokeStyle = 'rgba(59,34,16,0.6)';
+  g.lineWidth = 1.5;
+  g.beginPath(); g.arc(cx, cy, R, 0, TAU); g.stroke();
+  g.beginPath(); g.arc(cx, cy, R * 0.75, 0, TAU); g.stroke();
+  for (let i = 0; i < 4; i++) {
+    const a = i * Math.PI / 2 - Math.PI / 2;
+    for (const [side, color] of [[1, 'rgba(59,34,16,0.75)'], [-1, 'rgba(233,211,160,0.9)']]) {
+      g.beginPath();
+      g.moveTo(cx, cy);
+      g.lineTo(cx + Math.cos(a) * R * 1.05, cy + Math.sin(a) * R * 1.05);
+      g.lineTo(cx + Math.cos(a + side * 0.5) * R * 0.25, cy + Math.sin(a + side * 0.5) * R * 0.25);
+      g.closePath();
+      g.fillStyle = color; g.fill();
+    }
+  }
+  g.fillStyle = 'rgba(59,34,16,0.8)';
+  g.font = `700 10px ${POSTER}`;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('N', cx, cy - R - 8);
+}
+
+// Open sea inside the wheel: gradient water, light waves, rising bubbles,
+// and the Sea King swimming through during its event.
+function drawSea() {
+  ctx.save();
+  ctx.fillStyle = '#2A170B';                           // inside of the chute (dark wood)
+  ctx.fillRect(L.cx - L.hw, L.chuteTop - 2, L.hw * 2, L.gapY - L.chuteTop + 6);
+  ctx.beginPath(); ctx.arc(L.cx, L.cy, L.R, 0, TAU); ctx.clip();
+  const water = ctx.createLinearGradient(0, L.cy - L.R, 0, L.cy + L.R);
+  water.addColorStop(0, '#46ADDA');
+  water.addColorStop(0.5, '#1F6FA3');
+  water.addColorStop(1, '#0B3354');
+  ctx.fillStyle = water;
+  ctx.fillRect(L.cx - L.R, L.cy - L.R, L.R * 2, L.R * 2);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 3;
+  for (let k = 0; k < 5; k++) {
+    const y0 = L.cy - L.R + 40 + k * 80;
+    ctx.beginPath();
+    for (let x = L.cx - L.R; x <= L.cx + L.R; x += 12) {
+      ctx.lineTo(x, y0 + Math.sin(x * 0.04 + S.time * 1.4 + k) * 6);
+    }
+    ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 1.2;
+  for (let i = 0; i < 14; i++) {
+    const x = L.cx - L.R + ((i * 97) % (2 * L.R));
+    const y = L.cy + L.R - ((S.time * 30 + i * 53) % (2 * L.R));
+    ctx.beginPath(); ctx.arc(x + Math.sin(S.time * 2 + i) * 4, y, 2 + (i % 3), 0, TAU); ctx.stroke();
+  }
+
+  if (S.seaKingT > 0) {                                // giant sea serpent passing underneath
+    const p = 1 - S.seaKingT / 3;
+    const hx = L.cx - L.R - 120 + p * (2 * L.R + 240), hy = L.cy + 50;
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 46;
+    ctx.strokeStyle = 'rgba(8,40,52,0.85)';
+    ctx.beginPath();
+    for (let i = 0; i < 14; i++) ctx.lineTo(hx - i * 22, hy + Math.sin(i * 0.6 - S.time * 6) * 26);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(8,40,52,0.95)';
+    ctx.beginPath(); ctx.ellipse(hx + 22, hy - 4, 48, 32, 0.1, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#FFD54A';
+    ctx.beginPath(); ctx.ellipse(hx + 34, hy - 14, 8, 6, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = INK;
+    ctx.beginPath(); ctx.ellipse(hx + 35, hy - 14, 2.5, 5, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#FFFFFF';
+    for (let t = 0; t < 5; t++) {
+      ctx.beginPath();
+      ctx.moveTo(hx + 40 + t * 7, hy + 10); ctx.lineTo(hx + 43 + t * 7, hy + 20); ctx.lineTo(hx + 46 + t * 7, hy + 10);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+// The arena rim: a wooden ship's wheel (turns slowly, swings with Rough Seas).
+function drawWheel() {
+  const rr = L.R + 9, hx = L.hw + 9;
+  const ga = Math.asin(hx / rr);
+  const joinY = L.cy - rr * Math.cos(ga);
+  const rot = S.wheelBase + S.tilt * 1.6;
+  ctx.save();
+  ctx.lineCap = 'round';
+
+  for (let i = 0; i < 8; i++) {                         // handles
+    const a = rot + i / 8 * TAU;
+    const off = Math.abs(Math.atan2(Math.sin(a + Math.PI / 2), Math.cos(a + Math.PI / 2)));
+    if (off < 0.3) continue;                            // keep the chute clear
+    const cs = Math.cos(a), sn = Math.sin(a);
+    ctx.beginPath(); ctx.moveTo(L.cx + cs * (rr + 4), L.cy + sn * (rr + 4)); ctx.lineTo(L.cx + cs * (rr + 15), L.cy + sn * (rr + 15));
+    ctx.lineWidth = 10; ctx.strokeStyle = INK; ctx.stroke();
+    ctx.lineWidth = 6; ctx.strokeStyle = '#A9703C'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(L.cx + cs * (rr + 18), L.cy + sn * (rr + 18), 6, 0, TAU);
+    ctx.fillStyle = '#8B5A2B'; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = INK; ctx.stroke();
+  }
+
+  // Rim + chute as one path: left chute wall → around the wheel → right chute wall
+  ctx.beginPath();
+  ctx.moveTo(L.cx - hx, L.chuteTop);
+  ctx.lineTo(L.cx - hx, joinY);
+  ctx.arc(L.cx, L.cy, rr, -Math.PI / 2 - ga, -Math.PI / 2 + ga, true);
+  ctx.lineTo(L.cx + hx, L.chuteTop);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'butt';
+  ctx.lineWidth = 22; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.lineWidth = 17; ctx.strokeStyle = '#7A4A22'; ctx.stroke();
+  ctx.lineWidth = 6; ctx.strokeStyle = '#A9703C'; ctx.stroke();
+  ctx.setLineDash([14, 9]);                             // wood grain
+  ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(43,26,14,0.45)'; ctx.stroke();
+  ctx.setLineDash([]);
+
+  for (let i = 0; i < 24; i++) {                        // brass rivets
+    const a = rot + i / 24 * TAU;
+    const off = Math.abs(Math.atan2(Math.sin(a + Math.PI / 2), Math.cos(a + Math.PI / 2)));
+    if (off < ga + 0.05) continue;
+    ctx.beginPath(); ctx.arc(L.cx + Math.cos(a) * rr, L.cy + Math.sin(a) * rr, 2.6, 0, TAU);
+    ctx.fillStyle = '#E8B931'; ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = INK; ctx.stroke();
+  }
+  for (const y of [L.chuteTop + 14, L.chuteTop + 40]) {     // brass bands on the chute
+    for (const s of [-1, 1]) {
+      ctx.fillStyle = '#E8B931';
+      ctx.fillRect(L.cx + s * hx - 9, y, 18, 6);
+      ctx.lineWidth = 1.2; ctx.strokeStyle = INK;
+      ctx.strokeRect(L.cx + s * hx - 9, y, 18, 6);
+    }
+  }
+  ctx.restore();
+}
+
+function drawBall(b) {
+  const sp = getSprite(b.def, b.r);
+  const k = b.pop < 1 ? 0.6 + 0.4 * easeOutBack(b.pop) : 1;
+  const size = sp.size * k;
+  ctx.drawImage(sp.canvas, b.x - size / 2, b.y - size / 2, size, size);
+}
+
+// Devil Fruit: purple swirl fruit with a stem and leaf, gently pulsing.
+function drawFruit(f) {
+  const r = f.r * (1 + 0.08 * Math.sin(S.time * 8));
+  ctx.save();
+  ctx.translate(f.x, f.y);
+  ctx.beginPath(); ctx.arc(0, 0, r * 2, 0, TAU);
+  ctx.fillStyle = 'rgba(199,125,255,0.25)'; ctx.fill();
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU);
+  ctx.fillStyle = '#8E44AD'; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.strokeStyle = '#D7A6F2';
+  ctx.lineWidth = 1.6;
+  for (const [x, y, s] of [[-r * 0.35, -r * 0.2, 0.4], [r * 0.35, r * 0.2, 0.35], [0, r * 0.45, 0.3]]) {
+    ctx.beginPath();
+    for (let i = 0; i <= 20; i++) {
+      const a = i / 20 * TAU * 1.5, rr = r * s * (i / 20);
+      ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    ctx.stroke();
+  }
+  ctx.strokeStyle = INK; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(0, -r); ctx.quadraticCurveTo(3, -r - 6, 1, -r - 9); ctx.stroke();
+  ctx.fillStyle = '#4CAF50';
+  ctx.beginPath(); ctx.ellipse(6, -r - 6, 6, 3, -0.5, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+// Marine cannonball with a burning fuse; flashes red just before it blows.
+function drawCannon(c) {
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  if (c.fuse < 1 && Math.floor(S.time * 10) % 2 === 0) {
+    ctx.beginPath(); ctx.arc(0, 0, c.r + 6, 0, TAU);
+    ctx.fillStyle = 'rgba(232,40,43,0.45)'; ctx.fill();
+  }
+  ctx.beginPath(); ctx.arc(0, 0, c.r, 0, TAU);
+  const g = ctx.createRadialGradient(-c.r * 0.35, -c.r * 0.4, 1, 0, 0, c.r);
+  g.addColorStop(0, '#777777');
+  g.addColorStop(1, '#151515');
+  ctx.fillStyle = g; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.strokeStyle = '#C9A66B'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, -c.r); ctx.quadraticCurveTo(5, -c.r - 6, 2, -c.r - 10); ctx.stroke();
+  ctx.fillStyle = Math.random() < 0.5 ? '#FFD54A' : '#FF8A1F';
+  ctx.beginPath(); ctx.arc(2, -c.r - 11, 3 + Math.random() * 2, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+// Bounty ladder down the left edge (higher bounties at the top, tied with rope).
+function drawLadder() {
+  const hi = S.highest;
+  const first = Math.max(1, Math.min(hi - 6, TIERS.length - 9));
+  const last = Math.min(TIERS.length, first + 9);
+  const gap = 36, mr = 12, x = L.ladderX;
+  const yTop = L.cy - (last - first) * gap / 2;
+  ctx.save();
+  ctx.strokeStyle = '#8B5A2B';
+  ctx.lineWidth = 3;
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath(); ctx.moveTo(x, yTop - 6); ctx.lineTo(x, yTop + (last - first) * gap + 6); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = BROWN;
+  ctx.font = `700 8px ${POSTER}`;
+  ctx.fillText('BOUNTY', x, yTop - 32);
+  ctx.fillText('LADDER', x, yTop - 22);
+  for (let t = last; t >= first; t--) {
+    const def = TIERS[t - 1], y = yTop + (last - t) * gap;
+    if (t <= hi) {
+      const sp = getSprite(def, mr);
+      ctx.drawImage(sp.canvas, x - sp.size / 2, y - sp.size / 2, sp.size, sp.size);
+      if (t === hi) {
+        ctx.beginPath(); ctx.arc(x, y, mr + 4, 0, TAU);
+        ctx.lineWidth = 2.5; ctx.strokeStyle = GOLD;
+        ctx.globalAlpha = 0.55 + 0.45 * Math.sin(S.time * 5);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    } else {
+      ctx.beginPath(); ctx.arc(x, y, mr, 0, TAU);
+      ctx.fillStyle = 'rgba(233,211,160,0.9)'; ctx.fill();
+      ctx.setLineDash([3, 3]);
+      ctx.lineWidth = 1.5; ctx.strokeStyle = BROWN; ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = BROWN;
+      ctx.font = `700 13px ${POSTER}`;
+      ctx.fillText('?', x, y + 1);
+    }
+  }
+  ctx.restore();
+}
+
+function drawFx() {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const f of S.fx) {
+    const t = 1 - f.life / f.max;      // 0 → 1 over the effect's life
+    if (f.kind === 'ring') {
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = f.color;
+      ctx.lineWidth = f.width * (1 - t) + 1;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.r0 + (f.r1 - f.r0) * easeOut(t), 0, TAU); ctx.stroke();
+    } else if (f.kind === 'spark') {
+      ctx.globalAlpha = 1 - t;
+      ctx.fillStyle = f.color;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.size, 0, TAU); ctx.fill();
+    } else if (f.kind === 'coin') {                    // spinning gold coin
+      ctx.globalAlpha = t < 0.7 ? 1 : (1 - t) / 0.3;
+      const w = Math.abs(Math.cos(S.time * f.spin)) * f.size + 0.6;
+      ctx.beginPath(); ctx.ellipse(f.x, f.y, w, f.size, 0, 0, TAU);
+      ctx.fillStyle = GOLD; ctx.fill();
+      ctx.lineWidth = 1; ctx.strokeStyle = '#8A5A12'; ctx.stroke();
+    } else if (f.kind === 'flash') {
+      ctx.globalAlpha = (1 - t) * 0.85;
+      const g = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r);
+      g.addColorStop(0, '#FFFFFF');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, TAU); ctx.fill();
+    }
+  }
+  for (const f of S.fx) {
+    if (f.kind !== 'float') continue;
+    const t = 1 - f.life / f.max;
+    const pop = t < 0.12 ? 0.5 + 0.5 * easeOutBack(t / 0.12) : 1;
+    ctx.globalAlpha = t < 0.75 ? 1 : (1 - t) / 0.25;
+    const y = f.y - 40 * easeOut(t), x = clamp(f.x, 110, LW - 110);
+    fitFont(ctx, f.text, 300, f.size * pop, 700, POSTER);
+    inkText(ctx, f.text, x, y, f.color, 6);
+    if (f.sub) {
+      fitFont(ctx, f.sub, 300, 15 * pop, 700, POSTER);
+      inkText(ctx, f.sub, x, y + f.size * 0.85, CREAM, 4);
+    }
+  }
+  ctx.restore();
+}
+
+// Diagonal rain during Rough Seas.
+function drawRain() {
+  if (S.stormT <= 0) return;
+  const a = Math.min(1, S.stormT / 0.6) * 0.5;
+  const h = L.panelBottom - L.panelTop;
+  ctx.save();
+  ctx.strokeStyle = `rgba(30,50,70,${a})`;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i < 70; i++) {
+    const x = ((i * 73 + S.time * 300) % (LW + 80)) - 40;
+    const y = L.panelTop + ((i * 131 + S.time * 900) % h);
+    ctx.moveTo(x, y); ctx.lineTo(x - 8, y + 22);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Counter, top-left.
+function drawStats() {
+  const total = S.balls.reduce((n, b) => n + b.def.bounty, 0);
+  const best = TIERS[S.highest - 1];
+  const rows = [
+    ['TOTAL BOUNTY', fmtShort(total)],
+    ['HIGHEST', `${best.name.toUpperCase()} ${fmtShort(best.bounty)}`],
+    ['MERGES', String(S.merges)],
+  ];
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = `700 13px ${POSTER}`;
+  let y = L.statsY;
+  for (const [label, val] of rows) {
+    ctx.fillStyle = BROWN;
+    ctx.fillText(label, 14, y);
+    const x = 14 + ctx.measureText(label + ' ').width;
+    ctx.fillStyle = '#B3261E';
+    ctx.fillText(val, x, y);
+    y += 16;
+  }
+  ctx.restore();
+}
+
+// Round countdown on a wooden sign, top-center.
+function drawTimer() {
+  const secs = Math.max(0, Math.ceil(S.clock));
+  const text = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  const urgent = !S.timeUp && S.clock <= 10;
+  const pulse = urgent ? 1 + 0.12 * Math.pow(S.clock - Math.floor(S.clock), 3) : 1;
+  ctx.save();
+  ctx.translate(L.cx, L.timerY);
+  ctx.scale(pulse, pulse);
+  roundRect(ctx, -58, -24, 116, 48, 6);
+  const wood = ctx.createLinearGradient(0, -24, 0, 24);
+  wood.addColorStop(0, urgent || S.timeUp ? '#B3261E' : '#9C6634');
+  wood.addColorStop(1, urgent || S.timeUp ? '#7A1410' : '#6B3F1C');
+  ctx.fillStyle = wood; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.strokeStyle = 'rgba(43,26,14,0.35)'; ctx.lineWidth = 1;
+  for (const y of [-10, 9]) { ctx.beginPath(); ctx.moveTo(-50, y); ctx.lineTo(50, y + 2); ctx.stroke(); }
+  ctx.fillStyle = '#C9B07A';
+  for (const [x, y] of [[-50, -16], [50, -16], [-50, 16], [50, 16]]) { ctx.beginPath(); ctx.arc(x, y, 2.2, 0, TAU); ctx.fill(); }
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `700 30px ${POSTER}`;
+  inkText(ctx, text, 0, 2, CREAM, 4);
+  ctx.restore();
+}
+
+// The hook in wanted-poster lettering: gold with a dark outline.
+function drawTitle() {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  fitFont(ctx, HOOK[0], 480, 22, 700, POSTER);
+  ctx.fillStyle = BROWN;
+  ctx.fillText(HOOK[0], L.cx, L.title1);
+  [L.title2, L.title3].forEach((y, i) => {
+    const text = HOOK[i + 1];
+    fitFont(ctx, text, 470, i ? 50 : 44, 700, POSTER);
+    ctx.fillStyle = 'rgba(43,26,14,0.35)';
+    ctx.fillText(text, L.cx + 3, y + 4);                 // drop shadow
+    const g = ctx.createLinearGradient(0, y - 22, 0, y + 22);
+    g.addColorStop(0, '#FFE27A');
+    g.addColorStop(1, '#E9962B');
+    inkText(ctx, text, L.cx, y, g, 9);
+  });
+  ctx.restore();
+}
+
+// Parchment scroll banner across the wheel.
+function drawBanner() {
+  const B = S.banner;
+  if (!B) return;
+  const t = 1 - B.life / B.max;
+  const fadeOut = Math.min(1, B.life / 0.4);
+  const pop = t < 0.12 ? 0.3 + 0.7 * easeOutBack(t / 0.12) : 1;
+  const w = 430, h = B.big ? 136 : 104;
+  ctx.save();
+  ctx.globalAlpha = fadeOut;
+  ctx.translate(L.cx, L.cy - 10);
+  ctx.scale(pop, pop);
+  ctx.fillStyle = '#F3E3B5';
+  ctx.fillRect(-w / 2, -h / 2, w, h);
+  ctx.lineWidth = 4; ctx.strokeStyle = INK; ctx.strokeRect(-w / 2, -h / 2, w, h);
+  for (const s of [-1, 1]) {                            // rolled ends of the scroll
+    roundRect(ctx, s * w / 2 - 12, -h / 2 - 8, 24, h + 16, 10);
+    ctx.fillStyle = '#D9BC82'; ctx.fill();
+    ctx.lineWidth = 3; ctx.stroke();
+  }
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  fitFont(ctx, B.text, w - 50, B.big ? 54 : 46, 700, POSTER);
+  const g = ctx.createLinearGradient(0, -36, 0, 10);
+  g.addColorStop(0, '#FFE27A');
+  g.addColorStop(1, '#E9962B');
+  inkText(ctx, B.text, 0, B.big ? -14 : -12, g, 8);
+  if (B.sub) {
+    fitFont(ctx, B.sub, w - 60, 19, 700, POSTER);
+    ctx.fillStyle = BROWN;
+    ctx.fillText(B.sub, 0, B.big ? 40 : 30);
+  }
+  ctx.restore();
+}
+
+function draw() {
+  if (!canvas.width || !canvas.height || !backdrop.width) return;   // page not laid out yet
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(backdrop, 0, 0);
+  const sx = S.shake ? rand(-1, 1) * S.shake : 0, sy = S.shake ? rand(-1, 1) * S.shake : 0;
+  ctx.setTransform(scale, 0, 0, scale, sx * scale, sy * scale);
+
+  drawStats();
+  drawTimer();
+  drawTitle();
+  drawSea();
+  drawWheel();
+  for (const f of S.fruits) drawFruit(f);
+  for (const b of S.balls) drawBall(b);
+  for (const c of S.cannons) drawCannon(c);
+  drawLadder();
+  drawFx();
+  drawRain();
+
+  if (S.flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${S.flash})`;
+    ctx.fillRect(-20, -20, LW + 40, LH + 40);
+  }
+  drawBanner();
+
+  // Black bands (drawn last, unshaken, so nothing spills into TikTok's UI zones)
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, LW, L.panelTop);
+  ctx.fillRect(0, L.panelBottom, LW, LH - L.panelBottom);
+}
+
+/* =====================================================================
+   VIDEO RECORDING
+   Records one full round straight from the canvas (1080×1920, 60fps, with
+   sound), keeps going a few seconds into the freeze, then saves the file.
+   ===================================================================== */
+
+const params = new URLSearchParams(location.search);
+// ?upload=/path  → POST the finished video to this same-origin path instead of
+// downloading it (used by tools/render.py). ?autorecord → start on load.
+const UPLOAD_PATH = /^\/(?!\/)/.test(params.get('upload') || '') ? params.get('upload') : null;
+
+const Recorder = {
+  on: false, rec: null, chunks: [], tail: 0, startedAt: 0, frames: 0,
+  TAIL_SECONDS: 3.5,        // how long to keep filming the frozen end screen
+
+  // Best format this browser can record: MP4 (H.264/AAC) first, WebM fallback.
+  pickMime() {
+    const types = [
+      'video/mp4;codecs=avc1.64002A,mp4a.40.2',
+      'video/mp4;codecs=avc1,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+    return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  },
+
+  start() {
+    if (this.on) return;
+    if (!window.MediaRecorder || !canvas.captureStream) {
+      alert("This browser can't record video. Try Chrome or Safari on a computer.");
+      return;
+    }
+    Sound.unlock();
+    this.on = true;
+    resize();                 // lock the canvas to 1080×1920
+    startRound();
+    draw();
+
+    const stream = canvas.captureStream(60);
+    const audio = Sound.recordStream();
+    if (audio) audio.getAudioTracks().forEach(t => stream.addTrack(t));
+
+    const mimeType = this.pickMime();
+    const opts = { videoBitsPerSecond: 8_000_000, audioBitsPerSecond: 192_000 };
+    if (mimeType) opts.mimeType = mimeType;
+    this.rec = new MediaRecorder(stream, opts);
+    this.chunks = [];
+    this.rec.ondataavailable = e => { if (e.data.size) this.chunks.push(e.data); };
+    this.rec.onstop = () => this.save();
+    this.rec.start(1000);
+
+    this.tail = this.TAIL_SECONDS;
+    this.startedAt = performance.now();
+    this.frames = 0;
+    $('recBtn').classList.add('on');
+    $('recBtn').textContent = '⏹';
+    $('recBadge').hidden = false;
+  },
+
+  // Called every frame once the round is over: film the freeze, then stop.
+  tick(rdt) {
+    if (!this.rec) return;
+    this.tail -= rdt;
+    if (this.tail <= 0) this.stop();
+  },
+
+  stop() {
+    if (this.rec && this.rec.state !== 'inactive') this.rec.stop();
+  },
+
+  save() {
+    const type = this.rec.mimeType || 'video/webm';
+    const blob = new Blob(this.chunks, { type });
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const name = `one-piece-${stamp}.${ext}`;
+    const secs = (performance.now() - this.startedAt) / 1000;
+    const fps = (this.frames / secs).toFixed(1);
+
+    this.rec = null;
+    this.chunks = [];
+    this.on = false;
+    resize();                 // back to the normal screen layout
+    $('recBtn').classList.remove('on');
+    $('recBtn').textContent = '⏺';
+    $('recBadge').hidden = true;
+
+    if (UPLOAD_PATH) {
+      fetch(`${UPLOAD_PATH}?name=${encodeURIComponent(name)}&fps=${fps}`, { method: 'POST', body: blob });
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  },
+
+  // On-screen REC badge with elapsed time.
+  frame() {
+    if (!this.on) return;
+    this.frames++;
+    const s = Math.floor((performance.now() - this.startedAt) / 1000);
+    const text = `● REC ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    const badge = $('recBadge');
+    if (badge.textContent !== text) badge.textContent = text;
+  },
+};
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+
+$('recBtn').addEventListener('click', () => (Recorder.on ? Recorder.stop() : Recorder.start()));
+
+// Tap inside the wheel to drop a Chopper there
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width * LW;
+  const y = (e.clientY - rect.top) / rect.height * LH;
+  if (Math.hypot(x - L.cx, y - L.cy) < L.R - START.r && S.resetT <= 0 && !S.timeUp) spawnAt(x, y);
+});
+
+// Audio starts on load if the browser allows it. If it's blocked, any touch,
+// click or key press starts it (different browsers count different events).
+for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) {
+  window.addEventListener(ev, () => Sound.unlock(), { capture: true });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Sound.unlock(); });
+
+const muteBtn = $('muteBtn');
+function toggleMute() {
+  Sound.setMuted(!Sound.muted);
+  muteBtn.textContent = Sound.muted ? '🔇' : '🔊';
+}
+muteBtn.addEventListener('click', toggleMute);
+
+const panel = $('panel');
+$('setBtn').addEventListener('click', () => { panel.hidden = !panel.hidden; });
+$('closeBtn').addEventListener('click', () => { panel.hidden = true; });
+$('resetBtn').addEventListener('click', () => { startRound(); panel.hidden = true; });
+$('clearBtn').addEventListener('click', () => { S.record = 0; saveRecord(0); });
+
+// Bind a slider to a Settings key with a formatted readout
+function bindSlider(inputId, labelId, key, fmtVal) {
+  const input = $(inputId), label = $(labelId);
+  input.value = Settings[key];
+  label.textContent = fmtVal(Settings[key]);
+  input.addEventListener('input', () => {
+    Settings[key] = parseFloat(input.value);
+    label.textContent = fmtVal(Settings[key]);
+  });
+}
+bindSlider('inSpawn', 'vSpawn', 'spawnInterval', v => v.toFixed(2) + 's');
+bindSlider('inGrav', 'vGrav', 'gravity', v => String(Math.round(v)));
+bindSlider('inBounce', 'vBounce', 'bounce', v => v.toFixed(2));
+
+// Keyboard shortcuts for desktop recording: M = mute, R = restart the round
+window.addEventListener('keydown', e => {
+  if (e.key === 'm' || e.key === 'M') toggleMute();
+  if (e.key === 'r' || e.key === 'R') startRound();
+});
+
+window.addEventListener('resize', resize);
+
+/* =====================================================================
+   MAIN LOOP
+   ===================================================================== */
+
+resize();
+startRound();
+Sound.unlock();     // try to start sound right away
+if (params.has('autorecord')) Recorder.start();
+
+let lastT = performance.now();
+function frame(now) {
+  // Never negative (the first rAF timestamp can be earlier than lastT), capped after tab switches
+  const rdt = clamp((now - lastT) / 1000, 0, 1 / 20);
+  lastT = now;
+  try {
+    update(rdt);
+    draw();
+  } catch (err) {
+    console.error(err);     // log it (render.py prints these) but keep the loop alive
+  }
+  Recorder.frame();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

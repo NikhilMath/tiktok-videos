@@ -27,7 +27,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.join(ROOT, "renders")
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 PORT = 8765
-TIMEOUT_SECONDS = 600
+ROUND_SECONDS = 120
+GRACE_SECONDS = 90   # give up if no video arrives within round + grace
 
 done = threading.Event()
 result = {}
@@ -66,6 +67,8 @@ def main():
 
     url = f"http://127.0.0.1:{PORT}/{page}?autorecord&upload=/upload{seconds}"
     profile = tempfile.mkdtemp(prefix="render-chrome-")
+    log_path = os.path.join(profile, "chrome.log")     # page console output, for debugging
+    log = open(log_path, "w")
     chrome = subprocess.Popen(
         [
             CHROME,
@@ -77,18 +80,27 @@ def main():
             "--disable-backgrounding-occluded-windows",
             f"--user-data-dir={profile}",
             "--no-first-run",
+            "--enable-logging=stderr",
+            "--v=0",
             url,
         ],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=log,
     )
+    round_seconds = float(sys.argv[2]) if len(sys.argv) > 2 else ROUND_SECONDS
     print(f"Recording {page} (one full round, real time)…", flush=True)
     try:
-        if not done.wait(TIMEOUT_SECONDS):
-            sys.exit("Timed out waiting for the video.")
+        if not done.wait(round_seconds + GRACE_SECONDS):
+            log.flush()
+            with open(log_path, errors="replace") as f:
+                lines = [l.rstrip() for l in f if "CONSOLE" in l or "ERROR" in l]
+            print("\n".join(lines[-20:]) or "(no console output)")
+            sys.exit("Timed out waiting for the video. Run it again; if it keeps "
+                     "happening, open the page in Chrome and check the console.")
     finally:
         chrome.terminate()
         server.shutdown()
+        log.close()
 
     path = result["path"]
     if shutil.which("avconvert"):

@@ -1,0 +1,1589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Naruto: How Many Clones at the End?</title>
+<style>
+  /* ---------- Page shell: black, no scrolling, stage centered ---------- */
+  html, body {
+    margin: 0; height: 100%; background: #000; overflow: hidden;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+
+  /* The stage is sized by JS to a 9:16 (or taller) portrait box.
+     --u = CSS pixels per logical unit (logical width is 540). */
+  #stage { position: relative; --u: 1px; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  /* ---------- Recording indicator (on screen only, not in the video) ---------- */
+  #recBadge {
+    position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + var(--u) * 14);
+    transform: translateX(-50%); padding: calc(var(--u) * 6) calc(var(--u) * 14);
+    border-radius: 999px; background: rgba(200, 0, 30, 0.92); color: #fff;
+    font: 800 calc(var(--u) * 14) system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: 0.08em; pointer-events: none;
+  }
+  #recBadge[hidden] { display: none; }
+
+  /* ---------- Buttons (record / mute / settings) ---------- */
+  #btns {
+    position: absolute;
+    right: calc(var(--u) * 12);
+    top: calc(env(safe-area-inset-top, 0px) + var(--u) * 10);
+    display: flex; gap: calc(var(--u) * 8);
+  }
+  .iconBtn {
+    width: calc(var(--u) * 38); height: calc(var(--u) * 38);
+    border-radius: 50%; border: 2px solid #C8102E;
+    background: rgba(40, 0, 8, 0.85); color: #fff; cursor: pointer;
+    font-size: calc(var(--u) * 16); line-height: 1; padding: 0;
+    box-shadow: 0 0 calc(var(--u) * 10) rgba(200, 16, 46, 0.6);
+  }
+  #recBtn.on { background: #C8102E; }
+
+  /* ---------- Settings panel ---------- */
+  #panel {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: calc(var(--u) * 380); padding: calc(var(--u) * 20);
+    background: rgba(20, 0, 6, 0.95); border: 2px solid #C8102E; border-radius: calc(var(--u) * 4);
+    box-shadow: 0 0 calc(var(--u) * 24) rgba(200, 16, 46, 0.6);
+    color: #F5E6E8; font: 600 calc(var(--u) * 15) "Hiragino Mincho ProN", "Yu Mincho", Georgia, serif;
+  }
+  #panel[hidden] { display: none; }
+  #panel h2 { margin: 0 0 calc(var(--u) * 14); font-size: calc(var(--u) * 22); text-align: center; letter-spacing: 0.2em; }
+  #panel label { display: block; margin-bottom: calc(var(--u) * 14); }
+  #panel label span { float: right; color: #FF8A00; }
+  #panel input[type=range] { width: 100%; margin-top: calc(var(--u) * 6); accent-color: #FF8A00; }
+  .row { display: flex; gap: calc(var(--u) * 10); margin-top: calc(var(--u) * 6); }
+  .row button {
+    flex: 1; padding: calc(var(--u) * 10); cursor: pointer;
+    font: 700 calc(var(--u) * 15) "Hiragino Mincho ProN", "Yu Mincho", Georgia, serif; letter-spacing: 0.1em;
+    color: #fff; background: transparent; border: 2px solid #C8102E;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="recBadge" hidden>● REC 0:00</div>
+
+  <div id="btns">
+    <button class="iconBtn" id="recBtn" aria-label="Record a video">⏺</button>
+    <button class="iconBtn" id="muteBtn" aria-label="Toggle sound">🔊</button>
+    <button class="iconBtn" id="setBtn" aria-label="Settings">⚙️</button>
+  </div>
+
+  <div id="panel" hidden>
+    <h2>SETTINGS</h2>
+    <label>Swirl <span id="vSwirl"></span>
+      <input id="inSwirl" type="range" min="0.2" max="2.5" step="0.05">
+    </label>
+    <label>Clone split speed <span id="vSplit"></span>
+      <input id="inSplit" type="range" min="0.3" max="3" step="0.05">
+    </label>
+    <div class="row">
+      <button id="resetBtn">RESET</button>
+      <button id="closeBtn">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   CONFIG
+   ===================================================================== */
+
+const TAU = Math.PI * 2;
+const DEG = Math.PI / 180;
+const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+const SERIF = '"Hiragino Mincho ProN", "Yu Mincho", "Songti SC", Georgia, "Times New Roman", serif';
+const INK = '#160006';
+const ORANGE = '#FF8A00';
+
+// Length of one round. When the clock hits 0:00 everything freezes in place.
+const ROUND_SECONDS = 120;   // 2:00
+
+// Solid black bands at the top and bottom so TikTok's UI never covers the
+// action: the top bar ("Following | For You") and the caption / username area.
+// In the 1920px video: 220px on top, 380px at the bottom.
+const TOP_SPACE = 110;
+const BOTTOM_SPACE = 190;
+
+// The hook: a comment prompt + question at the top for retention.
+const HOOK = ['Comment below 👇', 'How many CLONES', 'at the end?'];
+
+/* Tuning knobs. These were chosen by simulating many rounds in the browser
+   console (see README → "Tuning by simulation") so the clone count rises and
+   crashes in waves and the final number is hard to guess. */
+const TUNING = {
+  cloneR: 13,          // clone head radius
+  realR: 16,           // the real Naruto (can't be popped, so clones never die out)
+  cloneCap: 220,       // hard limit (keeps 60fps)
+  splitMin: 1.4,       // seconds between splits for each clone…
+  splitMax: 2.8,
+  crowding: 25,        // …slowed down by (1 + clones / crowding)
+  swirl: 230,          // vortex strength at the rim
+  pull: 55,            // pull toward the middle
+  maxSpeed: 360,
+  frenzySeconds: 4,    // Sage Mode clone frenzy after a villain falls
+  villainHp: 1.0,      // multiplies every villain's hp
+  moveEvery: 7,        // seconds between a villain's jutsu
+};
+
+// User-tweakable settings (bound to the sliders).
+const Settings = { swirl: 1.0, split: 1.0 };
+
+/* Villain types. When one touches a clone, the clone poofs and the villain
+   loses 1 hp; every few seconds they use their jutsu (pops every clone within
+   moveR, or blasts them away if push is set). */
+const VILLAIN_TYPES = {
+  gaara:      { name: 'Gaara',      r: 30, speed: 140, color: '#D4A35A', move: 'SAND COFFIN!',         moveR: 60 },
+  orochimaru: { name: 'Orochimaru', r: 32, speed: 150, color: '#9B59B6', move: 'SNAKE STRIKE!',        moveR: 62 },
+  kisame:     { name: 'Kisame',     r: 34, speed: 155, color: '#3DA5FF', move: 'WATER SHARK!',         moveR: 70 },
+  itachi:     { name: 'Itachi',     r: 34, speed: 160, color: '#E8282B', move: 'AMATERASU!',           moveR: 68 },
+  deidara:    { name: 'Deidara',    r: 32, speed: 160, color: '#FFD21F', move: 'ART IS AN EXPLOSION!', moveR: 85 },
+  obito:      { name: 'Obito',      r: 33, speed: 165, color: '#FF8A1F', move: 'KAMUI!',               moveR: 66 },
+  pain:       { name: 'Pain',       r: 37, speed: 165, color: '#FF7A1A', move: 'SHINRA TENSEI!',       moveR: 130, push: true },
+  madara:     { name: 'Madara',     r: 40, speed: 175, color: '#3D7BFF', move: 'SUSANOO!',             moveR: 85 },
+  kaguya:     { name: 'Kaguya',     r: 44, speed: 185, color: '#E9ECF5', move: 'ASH-KILLING BONES!',   moveR: 95 },
+};
+
+// A new attack every ~10-12 seconds so something is always happening.
+// Each enemy is [type, hp]; later waves send two at once.
+const WAVES = [
+  { at: 3,   enemies: [['gaara', 18]] },
+  { at: 13,  enemies: [['orochimaru', 28]] },
+  { at: 23,  enemies: [['kisame', 36]] },
+  { at: 33,  enemies: [['itachi', 45]] },
+  { at: 44,  enemies: [['deidara', 30], ['obito', 30]] },
+  { at: 56,  enemies: [['pain', 60]] },
+  { at: 68,  enemies: [['madara', 75]] },
+  { at: 80,  enemies: [['kisame', 40], ['itachi', 50]] },
+  { at: 92,  enemies: [['pain', 50], ['obito', 40]] },
+  { at: 104, enemies: [['kaguya', 120]] },
+];
+const TOTAL_VILLAINS = WAVES.reduce((n, w) => n + w.enemies.length, 0);
+
+/* =====================================================================
+   CANVAS, SIZING & LAYOUT
+   ===================================================================== */
+
+const stage = document.getElementById('stage');
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const LW = 540;   // logical width; everything is laid out in these units
+let LH = 960;     // logical height (grows on phones taller than 9:16)
+let scale = 1;    // device pixels per logical unit
+const L = {};     // layout
+
+// Laid out top-down inside a 960-tall block (centered on taller phone screens):
+// black band, then the red-moon scene, then black band.
+function layout() {
+  const block = (LH - 960) / 2;
+  const top = block + TOP_SPACE;
+  L.cx = LW / 2;
+  L.sceneTop = top;
+  L.sceneBottom = block + 960 - BOTTOM_SPACE;
+  L.statsY = top + 12;                // counter, top-left
+  L.timerY = top + 40;                // round countdown (seal stamp), top-center
+  L.countY = top + 40;                // live clone count, top-right
+  L.title1 = top + 100;               // hook: small lead-in line
+  L.title2 = L.title1 + 40;           // hook: big lines
+  L.title3 = L.title2 + 44;
+  L.R = 208;                          // the moon arena
+  L.acx = LW / 2;
+  L.acy = L.sceneBottom - L.R - 14;
+}
+
+const VIDEO_W = 1080;   // recorded video is 1080×1920 (TikTok's native size)
+
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  let cssW, cssH;
+  if (Recorder.on) {                  // recording: exact 9:16 frame, fitted to the window
+    cssH = Math.min(wh, ww * 16 / 9); cssW = cssH * 9 / 16; LH = 960;
+  } else if (wh / ww >= 16 / 9) {     // tall phone: fill the whole screen
+    cssW = ww; cssH = wh; LH = LW * wh / ww;
+  } else {                            // wider screen: 9:16 box, letterboxed in black
+    cssH = wh; cssW = wh * 9 / 16; LH = 960;
+  }
+  stage.style.width = cssW + 'px';
+  stage.style.height = cssH + 'px';
+  stage.style.setProperty('--u', (cssW / LW) + 'px');
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);   // cap for phone performance
+  scale = Recorder.on ? VIDEO_W / LW : (cssW / LW) * dpr;
+  canvas.width = Math.round(LW * scale);
+  canvas.height = Math.round(LH * scale);
+
+  // Keep everything in place relative to the moon.
+  const oldCy = L.acy;
+  layout();
+  if (oldCy !== undefined) {
+    for (const o of [...S.clones, ...S.villains, ...S.ash]) o.y += L.acy - oldCy;
+  }
+
+  sprites.clear();                    // heads are cached at device resolution
+  buildBackdrop();
+}
+
+// shadowBlur ignores the canvas transform, so scale it manually.
+const blur = v => v * scale;
+
+/* =====================================================================
+   HELPERS
+   ===================================================================== */
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[(Math.random() * arr.length) | 0];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+// Overshooting pop-in. Exactly 0 at the start: float rounding would otherwise give a
+// tiny negative number, and a negative arc/gradient radius throws and stops the loop.
+const easeOutBack = t => (t <= 0 ? 0 : 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2));
+const elapsed = () => ROUND_SECONDS - S.clock;
+
+function rgba(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+// Set a font that fits `text` into maxW, starting from maxSize.
+function fitFont(g, text, maxW, maxSize, weight, family = FONT) {
+  let size = maxSize;
+  g.font = `${weight} ${size}px ${family}`;
+  const w = g.measureText(text).width;
+  if (w > maxW) {
+    size = Math.max(5, size * maxW / w);
+    g.font = `${weight} ${size}px ${family}`;
+  }
+  return size;
+}
+
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+
+// Glowing text: dark outline, colored glow, fill.
+function glowText(g, text, x, y, fill, glow, outline = 5) {
+  g.lineJoin = 'round';
+  g.lineWidth = outline;
+  g.strokeStyle = INK;
+  g.strokeText(text, x, y);
+  g.save();
+  g.shadowColor = glow;
+  g.shadowBlur = blur(14);
+  g.fillStyle = fill;
+  g.fillText(text, x, y);
+  g.restore();
+}
+
+/* =====================================================================
+   SOUND (Web Audio, synthesized: taiko loop, smoke poofs, gongs)
+   ===================================================================== */
+
+// Hirajoshi (Japanese pentatonic) for chimes
+const HIRA = [329.63, 369.99, 392.0, 493.88, 523.25, 659.25, 739.99, 783.99, 987.77, 1046.5];
+
+const Sound = {
+  ctx: null, out: null, comp: null, speaker: null, recDest: null, noise: null,
+  muted: false, lastPoof: 0,
+
+  // Called on page load (starts immediately where the browser allows autoplay)
+  // and again on every interaction, so audio starts the moment it's permitted.
+  // Graph: sounds → out → compressor → speaker (mute switch) → speakers
+  //                                  ↘ recDest (video recording, ignores mute)
+  unlock() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      this.ctx = new AC();
+      this.comp = this.ctx.createDynamicsCompressor();
+      this.out = this.ctx.createGain();
+      this.out.gain.value = 0.7;
+      this.speaker = this.ctx.createGain();
+      this.speaker.gain.value = this.muted ? 0 : 1;
+      this.out.connect(this.comp);
+      this.comp.connect(this.speaker);
+      this.speaker.connect(this.ctx.destination);
+      const len = this.ctx.sampleRate;
+      this.noise = this.ctx.createBuffer(1, len, len);
+      const d = this.noise.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    // 'suspended' = blocked by autoplay rules; 'interrupted' = iOS paused it (e.g. a call)
+    if (this.ctx.state !== 'running' && this.ctx.state !== 'closed') this.ctx.resume().catch(() => {});
+  },
+
+  // Audio stream for the video recorder (sound is recorded even when muted).
+  recordStream() {
+    if (!this.ctx || !this.ctx.createMediaStreamDestination) return null;
+    if (!this.recDest) {
+      this.recDest = this.ctx.createMediaStreamDestination();
+      this.comp.connect(this.recDest);
+    }
+    return this.recDest.stream;
+  },
+
+  get running() { return !!this.ctx && this.ctx.state === 'running'; },
+
+  setMuted(m) {
+    this.muted = m;
+    if (this.speaker) this.speaker.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.02);
+  },
+
+  get ready() { return this.running && (!this.muted || Recorder.on); },
+
+  note(freq, when, dur, type = 'sine', vol = 0.2, freqTo = 0) {
+    const c = this.ctx, t = c.currentTime + when;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t);
+    if (freqTo) o.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.out);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+
+  burst(dur, freq, q, vol, freqTo = 0, when = 0) {
+    const c = this.ctx, t = c.currentTime + when;
+    const src = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    src.buffer = this.noise;
+    f.type = 'bandpass';
+    f.frequency.setValueAtTime(freq, t);
+    if (freqTo) f.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    f.Q.value = q;
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(this.out);
+    src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.05);
+  },
+
+  // Taiko drum loop; gets busier as the round goes on.
+  beat(i, intensity) {
+    if (!this.ready) return;
+    const step = i % 8;
+    if (step === 0 || step === 3 || step === 6 || (intensity > 0.5 && step === 7)) {
+      this.note(95, 0, 0.35, 'sine', 0.45, 42);
+      this.burst(0.08, 180, 0.8, 0.25);
+    }
+    if (step === 2 || step === 5) this.burst(0.06, 2200, 6, 0.12);         // rim click
+    if (intensity > 0.75 && step % 2 === 1) this.burst(0.04, 3500, 8, 0.06);
+  },
+
+  poof(low = false) {
+    if (!this.ready) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastPoof < 0.045) return;
+    this.lastPoof = now;
+    this.burst(0.12, low ? rand(500, 800) : rand(1400, 2400), 1.5, low ? 0.22 : 0.12, low ? 200 : 600);
+  },
+
+  villain() {
+    if (!this.ready) return;
+    this.note(55, 0, 2.2, 'sawtooth', 0.12, 41);
+    this.note(82.5, 0, 2.0, 'sawtooth', 0.07, 61);
+    [110, 163.5, 247].forEach((f, i) => this.note(f, 0, 2.6 - i * 0.5, 'sine', 0.2 / (i + 1)));
+    this.burst(1.2, 400, 0.7, 0.3, 3000);
+  },
+
+  jutsu() {
+    if (!this.ready) return;
+    this.burst(0.5, 300, 1.2, 0.35, 3000);
+    this.note(70, 0, 0.6, 'sine', 0.5, 30);
+  },
+
+  defeat() {
+    if (!this.ready) return;
+    this.burst(0.6, 800, 1, 0.3, 4000);
+    [0, 2, 4, 5, 7].forEach((k, i) => this.note(HIRA[k], 0.05 + i * 0.07, 0.7, 'triangle', 0.1));
+  },
+
+  tick() {
+    if (!this.ready) return;
+    this.burst(0.05, 2600, 9, 0.35);                 // woodblock
+  },
+
+  // Gong when the round ends
+  timeUp() {
+    if (!this.ready) return;
+    [98, 146, 220, 293, 392].forEach((f, i) => this.note(f, 0, 3.5 - i * 0.45, 'sine', 0.25 / (i + 1)));
+    this.burst(0.5, 500, 0.7, 0.3, 150);
+  },
+};
+
+/* =====================================================================
+   SIMULATION STATE
+   ===================================================================== */
+
+const S = {
+  clones: [], villains: [], fx: [], ash: [],
+  flash: 0, invert: 0, shake: 0, banner: null,
+  slowmo: 0, frenzy: 0,
+  nextWave: 0, defeated: 0, lost: 0, peak: 1, made: 1,
+  beatT: 0, beatIdx: 0,
+  clock: ROUND_SECONDS, lastTick: 0, timeUp: false,
+  time: 0, acc: 0,
+};
+
+let nextId = 1;
+function makeClone(x, y, vx, vy, real = false) {
+  const r = real ? TUNING.realR : TUNING.cloneR;
+  return { id: nextId++, x, y, vx, vy, r, m: r * r, real,
+           splitT: rand(TUNING.splitMin, TUNING.splitMax), pop: 0, dead: false };
+}
+
+// Fresh round: just the real Naruto in the middle of the moon.
+function startRound() {
+  S.clones = [makeClone(L.acx, L.acy, rand(-80, 80), rand(-80, 80), true)];
+  S.clones[0].splitT = 0.8;
+  S.villains = [];
+  S.fx.length = 0;
+  S.flash = 0; S.invert = 0; S.shake = 0; S.banner = null; S.slowmo = 0; S.frenzy = 0;
+  S.nextWave = 0; S.defeated = 0; S.lost = 0; S.peak = 1; S.made = 1;
+  S.beatT = 0; S.beatIdx = 0;
+  S.clock = Number(params.get('seconds')) || ROUND_SECONDS;   // ?seconds=10 for quick tests
+  S.lastTick = 0; S.timeUp = false; S.acc = 0;
+  if (!S.ash.length) {
+    for (let i = 0; i < 55; i++) S.ash.push({ x: rand(0, LW), y: rand(0, LH), s: rand(0.8, 2.4), v: rand(8, 26), p: rand(0, TAU) });
+  }
+}
+
+/* =====================================================================
+   PHYSICS (a swirling vortex inside the moon; no gravity)
+   ===================================================================== */
+
+const STEP = 1 / 240;   // fixed physics step (4 substeps per 60fps frame)
+
+function step(dt) {
+  const cs = S.clones, vs = S.villains.filter(v => v.alive);
+  const swirl = TUNING.swirl * Settings.swirl;
+
+  // Clones: swirl around the moon's center, drift inward, wobble
+  for (const c of cs) {
+    const dx = c.x - L.acx, dy = c.y - L.acy, d = Math.hypot(dx, dy) || 1;
+    const k = d / L.R;
+    c.vx += (-dy / d * swirl * k - dx / d * TUNING.pull + rand(-60, 60)) * dt;
+    c.vy += (dx / d * swirl * k - dy / d * TUNING.pull + rand(-60, 60)) * dt;
+    const sp = Math.hypot(c.vx, c.vy);
+    if (sp > TUNING.maxSpeed) { c.vx *= TUNING.maxSpeed / sp; c.vy *= TUNING.maxSpeed / sp; }
+    c.x += c.vx * dt; c.y += c.vy * dt;
+  }
+
+  // Villains: hunt the nearest clone at their own speed
+  for (const v of vs) {
+    let best = null, bd = Infinity;
+    for (const c of cs) {
+      const d = (c.x - v.x) ** 2 + (c.y - v.y) ** 2;
+      if (d < bd) { bd = d; best = c; }
+    }
+    if (best) {
+      const d = Math.sqrt(bd) || 1;
+      v.vx += (best.x - v.x) / d * 420 * dt;
+      v.vy += (best.y - v.y) / d * 420 * dt;
+    }
+    const sp = Math.hypot(v.vx, v.vy) || 1, k = 1 + (v.speed / sp - 1) * Math.min(1, dt * 3);
+    v.vx *= k; v.vy *= k;
+    v.x += v.vx * dt; v.y += v.vy * dt;
+  }
+
+  // Clone vs clone: soft push apart (a squishy swarm)
+  for (let i = 0; i < cs.length; i++) {
+    const a = cs[i];
+    for (let j = i + 1; j < cs.length; j++) {
+      const b = cs[j];
+      const dx = b.x - a.x, dy = b.y - a.y, rs = a.r + b.r;
+      if (Math.abs(dx) >= rs || Math.abs(dy) >= rs) continue;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= rs * rs) continue;
+      const d = Math.sqrt(d2) || 0.01, nx = dx / d, ny = dy / d, push = (rs - d) * 0.5;
+      a.x -= nx * push; a.y -= ny * push;
+      b.x += nx * push; b.y += ny * push;
+      const rv = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+      if (rv < 0) {
+        const j2 = -0.65 * rv;
+        a.vx -= nx * j2; a.vy -= ny * j2;
+        b.vx += nx * j2; b.vy += ny * j2;
+      }
+    }
+  }
+
+  // Villain vs clone: the clone poofs, the villain takes a hit.
+  // The real Naruto just bounces off.
+  for (const v of vs) {
+    for (const c of cs) {
+      if (c.dead) continue;
+      const rs = v.r + c.r;
+      const dx = c.x - v.x, dy = c.y - v.y;
+      if (dx * dx + dy * dy < rs * rs) {
+        if (c.real) {
+          const d = Math.hypot(dx, dy) || 1, nx = dx / d, ny = dy / d;
+          c.x = v.x + nx * rs; c.y = v.y + ny * rs;
+          c.vx += nx * 300; c.vy += ny * 300;
+          continue;
+        }
+        popClone(c, true);
+        v.hp -= 1;
+        v.hit = 0.1;
+        if (v.hp <= 0) { defeatVillain(v); break; }
+      }
+    }
+  }
+
+  // Moon edge
+  for (const o of [...cs, ...vs]) {
+    const dx = o.x - L.acx, dy = o.y - L.acy, d = Math.hypot(dx, dy);
+    const lim = L.R - o.r - 3;
+    if (d > lim) {
+      const nx = dx / d, ny = dy / d;
+      o.x = L.acx + nx * lim; o.y = L.acy + ny * lim;
+      const vn = o.vx * nx + o.vy * ny;
+      if (vn > 0) { o.vx -= 1.6 * vn * nx; o.vy -= 1.6 * vn * ny; }
+    }
+  }
+
+  // Shadow clone jutsu: each clone splits on its own timer
+  const frenzy = S.frenzy > 0 ? 0.35 : 1;
+  for (const c of cs) {
+    if (c.dead) continue;
+    c.splitT -= dt * Settings.split;
+    if (c.splitT > 0) continue;
+    c.splitT = rand(TUNING.splitMin, TUNING.splitMax) * (1 + S.clones.length / TUNING.crowding) * frenzy;
+    if (S.clones.length >= TUNING.cloneCap) continue;
+    const a = rand(0, TAU);
+    const n = makeClone(c.x + Math.cos(a) * c.r * 1.6, c.y + Math.sin(a) * c.r * 1.6,
+                        c.vx + Math.cos(a) * 120, c.vy + Math.sin(a) * 120);
+    n.splitT = c.splitT * rand(0.8, 1.2);
+    S.clones.push(n);
+    S.made++;
+    puff(n.x, n.y, 0.8);
+    Sound.poof();
+  }
+
+  if (cs.some(c => c.dead)) S.clones = S.clones.filter(c => !c.dead);
+  S.peak = Math.max(S.peak, S.clones.length);
+}
+
+function popClone(c, low) {
+  if (c.dead || c.real) return;
+  c.dead = true;
+  S.lost++;
+  puff(c.x, c.y, 1);
+  Sound.poof(low);
+}
+
+/* =====================================================================
+   VILLAINS
+   ===================================================================== */
+
+function spawnVillain(style, baseHp) {
+  const def = VILLAIN_TYPES[style];
+  const a = rand(0, TAU);
+  const hp = Math.round(baseHp * TUNING.villainHp);
+  const v = {
+    ...def, style, hp, maxHp: hp,
+    x: L.acx + Math.cos(a) * (L.R - def.r - 10), y: L.acy + Math.sin(a) * (L.R - def.r - 10),
+    vx: -Math.cos(a) * def.speed, vy: -Math.sin(a) * def.speed,
+    m: def.r ** 2, alive: true, hit: 0, pop: 0, moveT: rand(2, 3.5),
+  };
+  S.villains.push(v);
+  addRing(v.x, v.y, v.r, v.r * 4, def.color, 0.8, 8);
+  return v;
+}
+
+// A wave of one or two villains, announced with a banner and a glitch flash.
+function spawnWave(wave) {
+  const vs = wave.enemies.map(([style, hp]) => spawnVillain(style, hp));
+  const names = vs.map(v => v.name.toUpperCase()).join(' & ');
+  S.banner = { text: names, sub: vs.length > 1 ? 'HAVE ENTERED THE BATTLE' : 'HAS ENTERED THE BATTLE',
+               life: 2.0, max: 2.0, color: vs[0].color };
+  S.invert = 0.16;
+  S.shake = 10;
+  Sound.villain();
+}
+
+// Signature jutsu: a shockwave that pops (or blasts away) nearby clones.
+function useJutsu(v) {
+  addRing(v.x, v.y, v.r, v.moveR, v.color, 0.6, 12);
+  addRing(v.x, v.y, v.r, v.moveR * 0.7, '#FFFFFF', 0.4, 5);
+  addFloat(v.x, v.y - v.r - 26, v.move, v.color, 22, 1.3);
+  S.shake = Math.max(S.shake, 8);
+  Sound.jutsu();
+  for (const c of S.clones) {
+    const dx = c.x - v.x, dy = c.y - v.y, d = Math.hypot(dx, dy) || 1;
+    if (d > v.moveR) continue;
+    if (v.push || c.real) { c.vx += dx / d * 700; c.vy += dy / d * 700; }
+    else popClone(c, true);
+  }
+  if (!v.push) S.clones = S.clones.filter(c => !c.dead);
+}
+
+function defeatVillain(v) {
+  v.alive = false;
+  S.defeated++;
+  S.frenzy = TUNING.frenzySeconds;
+  for (let i = 0; i < 4; i++) addRing(v.x, v.y, v.r * 0.5, v.r * (2.5 + i), i % 2 ? '#7FD8FF' : '#FFFFFF', 0.6 + i * 0.15, 8);
+  addSpiral(v.x, v.y, v.r * 2.2);
+  addSparks(v.x, v.y, 40, ['#7FD8FF', '#FFFFFF', ORANGE], 520);
+  addFloat(v.x, v.y - v.r - 30, 'RASENGAN!', '#7FD8FF', 30, 1.6);
+  S.banner = { text: 'DEFEATED!', sub: `${v.name} is down · Sage Mode clone frenzy!`, life: 2.2, max: 2.2, color: ORANGE };
+  S.invert = 0.12;
+  S.flash = 0.35;
+  S.shake = 14;
+  S.slowmo = 1.0;
+  Sound.defeat();
+}
+
+/* =====================================================================
+   EFFECTS
+   ===================================================================== */
+
+function addRing(x, y, r0, r1, color, life, width) {
+  S.fx.push({ kind: 'ring', x, y, r0, r1, color, life, max: life, width });
+}
+function addSparks(x, y, count, colors, speed) {
+  for (let i = 0; i < count; i++) {
+    const a = rand(0, TAU), s = rand(speed * 0.3, speed), life = rand(0.4, 0.9);
+    S.fx.push({ kind: 'spark', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                color: pick(colors), size: rand(1.5, 3.5), life, max: life });
+  }
+}
+// Little smoke cloud (every split and every popped clone).
+function puff(x, y, size) {
+  if (S.fx.length > 500) return;
+  S.fx.push({ kind: 'puff', x, y, size, life: 0.45, max: 0.45, rot: rand(0, TAU) });
+}
+function addSpiral(x, y, r) {
+  S.fx.push({ kind: 'spiral', x, y, r, life: 1.0, max: 1.0 });
+}
+function addFloat(x, y, text, color, size, life, sub) {
+  S.fx.push({ kind: 'float', x, y, text, color, size, life, max: life, sub });
+}
+
+function endRound() {
+  S.clock = 0;
+  S.timeUp = true;
+  S.slowmo = 0;
+  const n = S.clones.length;
+  S.banner = { text: String(n), sub: n === 1 ? 'SHADOW CLONE LEFT' : 'SHADOW CLONES LEFT', life: 3.2, max: 3.2, color: ORANGE, big: true };
+  S.flash = 0.35;
+  S.invert = 0.12;
+  Sound.timeUp();
+}
+
+/* =====================================================================
+   UPDATE
+   ===================================================================== */
+
+function update(rdt) {
+  S.time += rdt;
+
+  // Real-time timers (effects stay readable during slow-mo)
+  S.slowmo = Math.max(0, S.slowmo - rdt);
+  S.flash = Math.max(0, S.flash - rdt * 2.2);
+  S.invert = Math.max(0, S.invert - rdt);
+  S.shake = Math.max(0, S.shake - rdt * 40);
+  if (S.banner && (S.banner.life -= rdt) <= 0) S.banner = null;
+
+  for (const f of S.fx) {
+    f.life -= rdt;
+    if (f.kind === 'spark') {
+      f.x += f.vx * rdt; f.y += f.vy * rdt;
+      f.vx *= 0.94; f.vy *= 0.94;
+    }
+  }
+  S.fx = S.fx.filter(f => f.life > 0);
+  for (const a of S.ash) {                            // drifting ash
+    a.y -= a.v * rdt;
+    a.x += Math.sin(S.time * 0.8 + a.p) * 8 * rdt;
+    if (a.y < -5) { a.y = LH + 5; a.x = rand(0, LW); }
+  }
+  for (const c of S.clones) c.pop = Math.min(1, c.pop + rdt / 0.25);
+  for (const v of S.villains) { v.pop = Math.min(1, v.pop + rdt / 0.4); v.hit = Math.max(0, v.hit - rdt); }
+
+  // Round clock (wall-clock time, so the video is exactly 2:00)
+  if (!S.timeUp) {
+    S.clock -= rdt;
+    const whole = Math.ceil(S.clock);
+    if (whole !== S.lastTick && whole <= 5 && whole > 0) Sound.tick();
+    S.lastTick = whole;
+    if (S.clock <= 0) endRound();
+
+    // Taiko loop (eighth notes at 120 bpm), busier as time runs out
+    S.beatT += rdt;
+    while (S.beatT >= 0.25) {
+      S.beatT -= 0.25;
+      Sound.beat(S.beatIdx++, elapsed() / ROUND_SECONDS);
+    }
+  }
+  if (S.timeUp) { Recorder.tick(rdt); return; }   // frozen: nothing moves
+
+  const sdt = rdt * (S.slowmo > 0 ? 0.3 : 1);
+  S.frenzy = Math.max(0, S.frenzy - sdt);
+
+  // Villains invade in waves on a schedule
+  while (S.nextWave < WAVES.length && elapsed() >= WAVES[S.nextWave].at) {
+    spawnWave(WAVES[S.nextWave++]);
+  }
+  for (const v of S.villains) {
+    if (!v.alive) continue;
+    v.moveT -= sdt;
+    if (v.moveT <= 0) { v.moveT = TUNING.moveEvery; useJutsu(v); }
+  }
+  S.villains = S.villains.filter(v => v.alive);
+
+  // Fixed-step physics
+  S.acc += sdt;
+  let steps = 0;
+  while (S.acc >= STEP && steps < 10) { step(STEP); S.acc -= STEP; steps++; }
+  if (steps === 10) S.acc = 0;
+}
+
+/* =====================================================================
+   HEADS: every character is a floating head drawn in code (no image files),
+   front view, bold outlines. r = head radius (hair spikes stick out past it).
+   ===================================================================== */
+
+const polar = (c, deg, d) => ({ x: c.x + Math.cos(deg * DEG) * d, y: c.y + Math.sin(deg * DEG) * d });
+
+function inked(g, r, fill, w = 0.07) {
+  g.fillStyle = fill;
+  g.fill();
+  g.lineWidth = Math.max(1, r * w);
+  g.strokeStyle = INK;
+  g.stroke();
+}
+
+// Path for a tapered spike (hair, horn) growing out of the head.
+// ang: degrees (0 = right, 90 = down, 270 = up); len: tip distance from center.
+function spike(g, c, ang, len, half, bend = 0, thin = 0.4) {
+  const base = c.ry * 0.75;
+  const p0 = polar(c, ang - half, base), p1 = polar(c, ang + half, base);
+  const tip = polar(c, ang + bend, len);
+  const mid = (base + len) * 0.55;
+  const k0 = polar(c, ang - half * thin + bend * 0.5, mid);
+  const k1 = polar(c, ang + half * thin + bend * 0.5, mid);
+  g.beginPath();
+  g.moveTo(p0.x, p0.y);
+  g.quadraticCurveTo(k0.x, k0.y, tip.x, tip.y);
+  g.quadraticCurveTo(k1.x, k1.y, p1.x, p1.y);
+  g.closePath();
+}
+
+function spikes(g, c, r, color, angles, lens, half, bendK = 0.2) {
+  angles.forEach((a, i) => { spike(g, c, a, r * lens[i], half, (a - 270) * bendK); inked(g, r, color); });
+}
+
+function head(g, c, r, skin) {
+  g.beginPath(); g.ellipse(c.x, c.y, c.rx, c.ry, 0, 0, TAU); inked(g, r, skin);
+}
+
+// Hair covering the top of the head down to a straight hairline.
+function cap(g, c, r, color, hairline = -0.25, depth = 0.8) {
+  g.beginPath();
+  g.ellipse(c.x, c.y + hairline * r, c.rx * 1.04, c.ry * depth, 0, Math.PI, TAU);
+  g.closePath();
+  inked(g, r, color);
+}
+
+// Long straight hair hanging down both sides of the face.
+function curtains(g, c, r, color, len = 1.25, width = 0.32) {
+  for (const s of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(c.x + s * c.rx * 1.05, c.y - 0.3 * r);
+    g.lineTo(c.x + s * c.rx * 1.08, c.y + len * r);
+    g.lineTo(c.x + s * (c.rx * 1.08 - width * r), c.y + len * r * 0.92);
+    g.lineTo(c.x + s * (c.rx * 0.62), c.y - 0.1 * r);
+    g.closePath();
+    inked(g, r, color);
+  }
+}
+
+// Ninja forehead protector; slashed = rogue ninja.
+function headband(g, c, r, slashed = false) {
+  roundRect(g, c.x - c.rx * 0.99, c.y - 0.46 * r, c.rx * 1.98, 0.24 * r, 0.06 * r);
+  inked(g, r, '#1E2238', 0.05);
+  roundRect(g, c.x - 0.3 * r, c.y - 0.48 * r, 0.6 * r, 0.28 * r, 0.05 * r);
+  inked(g, r, '#D7DDE4', 0.05);
+  g.beginPath();                                      // leaf swirl
+  g.arc(c.x - 0.03 * r, c.y - 0.34 * r, 0.07 * r, 0.3, TAU * 0.85);
+  g.lineTo(c.x + 0.12 * r, c.y - 0.3 * r);
+  g.lineWidth = Math.max(0.8, r * 0.035); g.strokeStyle = INK; g.stroke();
+  if (slashed) {
+    g.beginPath(); g.moveTo(c.x - 0.3 * r, c.y - 0.36 * r); g.lineTo(c.x + 0.3 * r, c.y - 0.33 * r);
+    g.lineWidth = Math.max(1, r * 0.05); g.strokeStyle = '#C8102E'; g.stroke();
+  }
+}
+
+// Eyes. kind: plain | sharingan | rinnegan | slit | byakugan
+function eyes(g, c, r, kind, iris, { y = 0.04, gap = 0.3, size = 0.17 } = {}) {
+  for (const s of [-1, 1]) {
+    const ex = c.x + s * gap * r, ey = c.y + y * r, rx = size * r, ry = size * 0.82 * r;
+    g.beginPath(); g.ellipse(ex, ey, rx, ry, -s * 0.15, 0, TAU);
+    inked(g, r, '#FFFFFF', 0.05);
+    const ir = rx * 0.66;
+    g.beginPath(); g.arc(ex, ey, ir, 0, TAU); g.fillStyle = iris; g.fill();
+    g.fillStyle = INK; g.strokeStyle = INK;
+    if (kind === 'plain') {
+      g.beginPath(); g.arc(ex, ey, ir * 0.5, 0, TAU); g.fill();
+    } else if (kind === 'sharingan') {
+      g.beginPath(); g.arc(ex, ey, ir * 0.28, 0, TAU); g.fill();
+      for (let k = 0; k < 3; k++) {
+        const a = k / 3 * TAU + S.time * 0;
+        g.beginPath(); g.arc(ex + Math.cos(a) * ir * 0.62, ey + Math.sin(a) * ir * 0.62, ir * 0.17, 0, TAU); g.fill();
+      }
+    } else if (kind === 'rinnegan') {
+      g.lineWidth = Math.max(0.8, r * 0.025);
+      for (const k of [0.25, 0.5, 0.78]) { g.beginPath(); g.arc(ex, ey, ir * k, 0, TAU); g.stroke(); }
+    } else if (kind === 'slit') {
+      g.beginPath(); g.ellipse(ex, ey, ir * 0.18, ir * 0.85, 0, 0, TAU); g.fill();
+    }
+    g.beginPath(); g.arc(ex - ir * 0.35, ey - ir * 0.35, ir * 0.22, 0, TAU);   // highlight
+    g.fillStyle = 'rgba(255,255,255,0.9)'; g.fill();
+  }
+}
+
+function brows(g, c, r, angry = true) {
+  for (const s of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(c.x + s * 0.12 * r, c.y - 0.16 * r + (angry ? 0.04 * r : 0));
+    g.lineTo(c.x + s * 0.48 * r, c.y - 0.22 * r);
+    g.lineWidth = Math.max(1, r * 0.07); g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+  }
+}
+
+function smirk(g, c, r, color = INK) {
+  g.beginPath();
+  g.moveTo(c.x - 0.18 * r, c.y + 0.5 * r);
+  g.quadraticCurveTo(c.x, c.y + 0.55 * r, c.x + 0.22 * r, c.y + 0.44 * r);
+  g.lineWidth = Math.max(1, r * 0.06); g.lineCap = 'round'; g.strokeStyle = color; g.stroke();
+}
+
+const HEADS = {
+  // Naruto: spiky yellow hair, headband, whiskers, big grin
+  naruto(g, c, r) {
+    spikes(g, c, r, '#FFD21F', [150, 172, 196, 220, 244, 270, 296, 320, 344, 8, 30],
+           [1.25, 1.4, 1.5, 1.55, 1.6, 1.62, 1.6, 1.55, 1.5, 1.4, 1.25], 12);
+    head(g, c, r, '#FFD9B3');
+    cap(g, c, r, '#FFD21F', -0.3, 0.75);
+    headband(g, c, r);
+    eyes(g, c, r, 'plain', '#2E86FF', { y: 0.06, gap: 0.3, size: 0.17 });
+    for (const s of [-1, 1]) {                         // whiskers
+      for (let k = 0; k < 3; k++) {
+        g.beginPath();
+        g.moveTo(c.x + s * 0.4 * r, c.y + (0.26 + k * 0.1) * r);
+        g.lineTo(c.x + s * 0.72 * r, c.y + (0.2 + k * 0.13) * r);
+        g.lineWidth = Math.max(0.8, r * 0.05); g.strokeStyle = INK; g.stroke();
+      }
+    }
+    g.beginPath();                                     // big open grin
+    g.moveTo(c.x - 0.3 * r, c.y + 0.42 * r);
+    g.quadraticCurveTo(c.x, c.y + 0.82 * r, c.x + 0.3 * r, c.y + 0.42 * r);
+    g.closePath();
+    inked(g, r, '#8A1F2B', 0.05);
+  },
+  orochimaru(g, c, r) {
+    curtains(g, c, r, '#111118', 1.3, 0.34);
+    head(g, c, r, '#ECE6F0');
+    cap(g, c, r, '#111118', -0.3, 0.75);
+    for (const s of [-1, 1]) {                         // purple eye markings
+      g.beginPath();
+      g.moveTo(c.x + s * 0.12 * r, c.y - 0.02 * r);
+      g.quadraticCurveTo(c.x + s * 0.32 * r, c.y - 0.22 * r, c.x + s * 0.5 * r, c.y + 0.06 * r);
+      g.quadraticCurveTo(c.x + s * 0.32 * r, c.y + 0.3 * r, c.x + s * 0.12 * r, c.y - 0.02 * r);
+      g.fillStyle = '#7E3FA8'; g.fill();
+    }
+    eyes(g, c, r, 'slit', '#E8C21A', { y: 0.05, gap: 0.3, size: 0.13 });
+    brows(g, c, r);
+    smirk(g, c, r, '#5B2C83');
+  },
+  itachi(g, c, r) {
+    curtains(g, c, r, '#121212', 0.9, 0.24);
+    head(g, c, r, '#FFD9B3');
+    cap(g, c, r, '#121212', -0.3, 0.75);
+    headband(g, c, r, true);
+    for (const s of [-1, 1]) {                         // tear-trough lines
+      g.beginPath(); g.moveTo(c.x + s * 0.16 * r, c.y + 0.16 * r); g.lineTo(c.x + s * 0.2 * r, c.y + 0.38 * r);
+      g.lineWidth = Math.max(0.8, r * 0.04); g.strokeStyle = INK; g.stroke();
+    }
+    eyes(g, c, r, 'sharingan', '#D7141E', { y: 0.04, gap: 0.3, size: 0.15 });
+    brows(g, c, r, false);
+    smirk(g, c, r);
+  },
+  pain(g, c, r) {
+    spikes(g, c, r, '#FF7A1A', [160, 186, 212, 238, 262, 286, 310, 336, 2, 26],
+           [1.2, 1.35, 1.45, 1.5, 1.55, 1.55, 1.5, 1.45, 1.35, 1.2], 13);
+    head(g, c, r, '#FFD9B3');
+    cap(g, c, r, '#FF7A1A', -0.3, 0.75);
+    headband(g, c, r, true);
+    eyes(g, c, r, 'rinnegan', '#C7B8E8', { y: 0.04, gap: 0.3, size: 0.16 });
+    for (let k = 0; k < 3; k++) {                      // piercings
+      for (const s of [-1, 1]) {
+        g.beginPath(); g.arc(c.x + s * 0.06 * r, c.y + (0.12 + k * 0.1) * r, 0.035 * r, 0, TAU);
+        g.fillStyle = '#9AA3AD'; g.fill();
+      }
+    }
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.arc(c.x + s * 0.1 * r, c.y + 0.62 * r, 0.035 * r, 0, TAU); g.fillStyle = '#9AA3AD'; g.fill();
+    }
+    brows(g, c, r);
+    smirk(g, c, r);
+  },
+  madara(g, c, r) {
+    spikes(g, c, r, '#121212', [120, 140, 162, 186, 212, 240, 270, 300, 328, 354, 18, 40, 60],
+           [1.6, 1.7, 1.75, 1.7, 1.65, 1.6, 1.6, 1.6, 1.65, 1.7, 1.75, 1.7, 1.6], 12, 0.1);
+    head(g, c, r, '#FFD9B3');
+    cap(g, c, r, '#121212', -0.3, 0.75);
+    eyes(g, c, r, 'rinnegan', '#B9A6E8', { y: 0.04, gap: 0.3, size: 0.16 });
+    g.beginPath();                                     // long bang over one eye
+    g.moveTo(c.x + 0.05 * r, c.y - 0.45 * r);
+    g.quadraticCurveTo(c.x + 0.5 * r, c.y - 0.1 * r, c.x + 0.42 * r, c.y + 0.45 * r);
+    g.lineTo(c.x + 0.18 * r, c.y - 0.05 * r);
+    g.closePath();
+    inked(g, r, '#121212');
+    brows(g, c, r);
+    smirk(g, c, r);
+  },
+  gaara(g, c, r) {
+    spikes(g, c, r, '#B83227', [170, 196, 222, 248, 272, 296, 320, 346, 10],
+           [1.25, 1.35, 1.4, 1.45, 1.45, 1.45, 1.4, 1.35, 1.25], 13);
+    head(g, c, r, '#F2DCC8');
+    cap(g, c, r, '#B83227', -0.3, 0.75);
+    for (const s of [-1, 1]) {                         // dark rings around the eyes
+      g.beginPath(); g.ellipse(c.x + s * 0.3 * r, c.y + 0.04 * r, 0.24 * r, 0.2 * r, 0, 0, TAU);
+      g.fillStyle = '#1A1A1A'; g.fill();
+    }
+    eyes(g, c, r, 'plain', '#7ED6C9', { y: 0.04, gap: 0.3, size: 0.15 });
+    g.fillStyle = '#C8102E';                           // 愛 ("love") on his forehead
+    g.font = `700 ${0.3 * r}px ${SERIF}`;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('愛', c.x - 0.3 * r, c.y - 0.4 * r);
+    smirk(g, c, r);
+  },
+  kisame(g, c, r) {
+    spikes(g, c, r, '#2C4A7A', [200, 228, 256, 284, 312, 340], [1.35, 1.45, 1.5, 1.5, 1.45, 1.35], 12, 0.1);
+    head(g, c, r, '#7FA6C9');
+    cap(g, c, r, '#2C4A7A', -0.3, 0.75);
+    headband(g, c, r, true);
+    for (const s of [-1, 1]) {                         // gills
+      for (let k = 0; k < 3; k++) {
+        g.beginPath();
+        g.moveTo(c.x + s * (0.5 + k * 0.08) * r, c.y + 0.14 * r);
+        g.lineTo(c.x + s * (0.54 + k * 0.08) * r, c.y + 0.32 * r);
+        g.lineWidth = Math.max(0.8, r * 0.035); g.strokeStyle = INK; g.stroke();
+      }
+    }
+    eyes(g, c, r, 'plain', '#FFFFFF', { y: 0.04, gap: 0.3, size: 0.12 });
+    g.beginPath();                                     // shark grin
+    g.moveTo(c.x - 0.38 * r, c.y + 0.42 * r);
+    g.quadraticCurveTo(c.x, c.y + 0.78 * r, c.x + 0.38 * r, c.y + 0.42 * r);
+    g.closePath();
+    inked(g, r, '#5A0F16', 0.05);
+    g.fillStyle = '#FFFFFF';
+    for (let x = -0.28; x <= 0.29; x += 0.112) {
+      g.beginPath();
+      g.moveTo(c.x + (x - 0.05) * r, c.y + 0.44 * r);
+      g.lineTo(c.x + x * r, c.y + 0.56 * r);
+      g.lineTo(c.x + (x + 0.05) * r, c.y + 0.44 * r);
+      g.fill();
+    }
+  },
+  deidara(g, c, r) {
+    curtains(g, c, r, '#F2D16B', 1.0, 0.28);
+    spike(g, c, 270, r * 1.55, 14, 0, 0.8); inked(g, r, '#F2D16B');   // top-knot
+    head(g, c, r, '#FFD9B3');
+    cap(g, c, r, '#F2D16B', -0.3, 0.75);
+    headband(g, c, r, true);
+    eyes(g, c, r, 'plain', '#3D7BFF', { y: 0.04, gap: 0.3, size: 0.16 });
+    g.beginPath();                                     // long bang covering one eye
+    g.moveTo(c.x - 0.02 * r, c.y - 0.5 * r);
+    g.quadraticCurveTo(c.x - 0.7 * r, c.y - 0.2 * r, c.x - 0.56 * r, c.y + 0.42 * r);
+    g.lineTo(c.x - 0.1 * r, c.y - 0.12 * r);
+    g.closePath();
+    inked(g, r, '#F2D16B');
+    smirk(g, c, r);
+  },
+  obito(g, c, r) {
+    spikes(g, c, r, '#1A1A1A', [196, 222, 248, 274, 300, 326, 352], [1.25, 1.32, 1.38, 1.4, 1.38, 1.32, 1.25], 12);
+    head(g, c, r, '#FF8A1F');                          // orange spiral mask
+    const ex = c.x + 0.28 * r, ey = c.y - 0.12 * r;    // the single eye hole
+    g.save();
+    g.beginPath(); g.ellipse(c.x, c.y, c.rx, c.ry, 0, 0, TAU); g.clip();
+    g.beginPath();
+    for (let i = 0; i <= 140; i++) {
+      const t = i / 140, a = t * TAU * 3.3, rr = 0.12 * r + t * 1.1 * r;
+      g.lineTo(ex + Math.cos(a) * rr, ey + Math.sin(a) * rr);
+    }
+    g.lineWidth = Math.max(1, r * 0.05); g.strokeStyle = INK; g.stroke();
+    g.restore();
+    g.beginPath(); g.arc(ex, ey, 0.12 * r, 0, TAU); g.fillStyle = INK; g.fill();
+    g.beginPath(); g.arc(ex, ey, 0.065 * r, 0, TAU); g.fillStyle = '#D7141E'; g.fill();
+    g.beginPath(); g.ellipse(c.x, c.y, c.rx, c.ry, 0, 0, TAU);
+    g.lineWidth = Math.max(1, r * 0.07); g.strokeStyle = INK; g.stroke();
+  },
+  kaguya(g, c, r) {
+    curtains(g, c, r, '#F4F2FA', 1.4, 0.36);
+    for (const a of [244, 296]) {                      // small horns
+      spike(g, c, a, r * 1.45, 7, 0, 0.3); inked(g, r, '#D9D6E2');
+    }
+    head(g, c, r, '#F3F1F7');
+    cap(g, c, r, '#F4F2FA', -0.3, 0.75);
+    eyes(g, c, r, 'byakugan', '#E8E4F2', { y: 0.06, gap: 0.3, size: 0.16 });
+    g.beginPath();                                     // third eye
+    g.ellipse(c.x, c.y - 0.32 * r, 0.07 * r, 0.12 * r, 0, 0, TAU);
+    inked(g, r, '#D7141E', 0.05);
+    g.beginPath(); g.arc(c.x, c.y - 0.32 * r, 0.035 * r, 0, TAU); g.fillStyle = INK; g.fill();
+    for (const s of [-1, 1]) {                         // veins (Byakugan)
+      g.beginPath(); g.moveTo(c.x + s * 0.14 * r, c.y - 0.08 * r); g.lineTo(c.x + s * 0.08 * r, c.y - 0.2 * r);
+      g.lineWidth = Math.max(0.8, r * 0.03); g.strokeStyle = '#8E86A6'; g.stroke();
+    }
+    smirk(g, c, r, '#8E86A6');
+  },
+};
+
+// Heads are pre-rendered once per character and size.
+const sprites = new Map();
+
+function getSprite(style, r) {
+  const key = `${style}|${r}`;
+  let s = sprites.get(key);
+  if (s) return s;
+  const size = r * 4.2;                                // room for hair spikes
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  g.scale(c.width / size, c.height / size);
+  g.translate(size / 2, size / 2);
+  g.lineJoin = 'round';
+  HEADS[style](g, { x: 0, y: 0, rx: r * 0.92, ry: r }, r);
+  s = { canvas: c, size };
+  sprites.set(key, s);
+  return s;
+}
+
+/* =====================================================================
+   RENDERING
+   ===================================================================== */
+
+// Night sky + faint kanji columns, cached (rebuilt on resize).
+let backdrop = null;
+function buildBackdrop() {
+  backdrop = document.createElement('canvas');
+  backdrop.width = canvas.width;
+  backdrop.height = canvas.height;
+  const g = backdrop.getContext('2d');
+  g.scale(scale, scale);
+  const sky = g.createLinearGradient(0, L.sceneTop, 0, L.sceneBottom);
+  sky.addColorStop(0, '#12000A');
+  sky.addColorStop(0.55, '#3A0616');
+  sky.addColorStop(1, '#0C0004');
+  g.fillStyle = sky;
+  g.fillRect(0, 0, LW, LH);
+  g.fillStyle = 'rgba(255,60,80,0.11)';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.font = `700 30px ${SERIF}`;
+  const cols = [[22, '影分身之術'], [LW - 22, '多重影分身']];
+  for (const [x, text] of cols) {
+    [...text].forEach((ch, i) => g.fillText(ch, x, L.acy - 120 + i * 60));
+  }
+}
+
+function tomoe(x, y, s, ang) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(ang);
+  ctx.beginPath();
+  ctx.arc(0, 0, s, 0, TAU);
+  ctx.moveTo(s, 0);
+  ctx.quadraticCurveTo(s * 1.2, s * 2.2, -s * 1.4, s * 2.6);
+  ctx.quadraticCurveTo(s * 0.4, s * 1.6, 0, s);
+  ctx.fill();
+  ctx.restore();
+}
+
+// The arena: a giant red moon with Rinne-Sharingan rings and turning tomoe.
+function drawMoon() {
+  const { acx, acy, R } = L;
+  const glow = ctx.createRadialGradient(acx, acy, R * 0.9, acx, acy, R * 1.3);
+  glow.addColorStop(0, 'rgba(255,30,60,0.35)');
+  glow.addColorStop(1, 'rgba(255,30,60,0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath(); ctx.arc(acx, acy, R * 1.3, 0, TAU); ctx.fill();
+
+  const disc = ctx.createRadialGradient(acx - R * 0.25, acy - R * 0.3, R * 0.1, acx, acy, R);
+  disc.addColorStop(0, '#E2213F');
+  disc.addColorStop(0.7, '#9C0D24');
+  disc.addColorStop(1, '#4E0010');
+  ctx.fillStyle = disc;
+  ctx.beginPath(); ctx.arc(acx, acy, R, 0, TAU); ctx.fill();
+
+  ctx.strokeStyle = 'rgba(20,0,6,0.38)';
+  ctx.lineWidth = 3;
+  for (const k of [0.22, 0.44, 0.66, 0.88]) {
+    ctx.beginPath(); ctx.arc(acx, acy, R * k, 0, TAU); ctx.stroke();
+  }
+  ctx.fillStyle = 'rgba(20,0,6,0.42)';
+  [0.44, 0.66, 0.88].forEach((k, ring) => {
+    const turn = S.time * (ring % 2 ? -0.25 : 0.25);
+    for (let i = 0; i < 3; i++) {
+      const a = turn + i / 3 * TAU + ring * 0.6;
+      tomoe(acx + Math.cos(a) * R * k, acy + Math.sin(a) * R * k, 7 + ring * 1.5, a + Math.PI / 2);
+    }
+  });
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = '#1A0006';
+  ctx.beginPath(); ctx.arc(acx, acy, R, 0, TAU); ctx.stroke();
+}
+
+function drawAsh() {
+  ctx.fillStyle = 'rgba(255,140,140,0.45)';
+  for (const a of S.ash) { ctx.beginPath(); ctx.arc(a.x, a.y, a.s, 0, TAU); ctx.fill(); }
+}
+
+function drawClones() {
+  const sage = S.frenzy > 0;
+  for (const c of S.clones) {
+    const sp = getSprite('naruto', c.r);
+    const k = c.pop < 1 ? 0.4 + 0.6 * easeOutBack(c.pop) : 1;
+    const size = sp.size * k;
+    if (c.real) {                                      // the real one: orange chakra ring
+      ctx.beginPath(); ctx.arc(c.x, c.y, c.r * 1.7, 0, TAU);
+      ctx.lineWidth = 3; ctx.strokeStyle = rgba(ORANGE, 0.6 + 0.3 * Math.sin(S.time * 6)); ctx.stroke();
+    }
+    if (sage) {                                        // Sage Mode: orange chakra glow
+      ctx.beginPath(); ctx.arc(c.x, c.y, c.r * 1.5, 0, TAU);
+      ctx.fillStyle = 'rgba(255,138,0,0.28)'; ctx.fill();
+    }
+    ctx.drawImage(sp.canvas, c.x - size / 2, c.y - size / 2, size, size);
+  }
+}
+
+// Villains: dark chakra wisps, the head, HP bar and name.
+function drawVillain(v) {
+  const n = 16;
+  ctx.beginPath();
+  for (let i = 0; i <= n * 2; i++) {
+    const a = i / (n * 2) * TAU;
+    const rr = i % 2 ? v.r * 1.2 : v.r * (1.55 + Math.sin(S.time * 9 + i * 1.3) * 0.15 + Math.max(0, -Math.sin(a)) * 0.35);
+    ctx.lineTo(v.x + Math.cos(a) * rr, v.y + Math.sin(a) * rr);
+  }
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(15,0,20,0.75)';
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = v.color;
+  ctx.stroke();
+
+  const sp = getSprite(v.style, v.r);
+  const k = (v.pop < 1 ? 0.3 + 0.7 * easeOutBack(v.pop) : 1) * (v.hit > 0 ? 1.06 : 1);
+  const size = sp.size * k;
+  ctx.drawImage(sp.canvas, v.x - size / 2, v.y - size / 2, size, size);
+
+  const frac = clamp(v.hp / v.maxHp, 0, 1), w = v.r * 2;
+  const by = v.y + v.r + 14;
+  ctx.fillStyle = INK; ctx.fillRect(v.x - w / 2 - 2, by - 2, w + 4, 9);
+  ctx.fillStyle = v.color; ctx.fillRect(v.x - w / 2, by, w * frac, 5);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `700 15px ${SERIF}`;
+  glowText(ctx, v.name.toUpperCase(), v.x, by + 20, '#FFFFFF', v.color, 4);
+}
+
+function drawFx() {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const f of S.fx) {
+    const t = 1 - f.life / f.max;      // 0 → 1 over the effect's life
+    if (f.kind === 'ring') {
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = f.color;
+      ctx.lineWidth = f.width * (1 - t) + 1;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.r0 + (f.r1 - f.r0) * easeOut(t), 0, TAU); ctx.stroke();
+    } else if (f.kind === 'spark') {
+      ctx.globalAlpha = 1 - t;
+      ctx.fillStyle = f.color;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.size, 0, TAU); ctx.fill();
+    } else if (f.kind === 'puff') {                    // smoke cloud
+      ctx.globalAlpha = 0.75 * (1 - t);
+      ctx.fillStyle = '#EDE6E8';
+      const rr = (6 + 12 * easeOut(t)) * f.size;
+      for (let i = 0; i < 4; i++) {
+        const a = f.rot + i / 4 * TAU;
+        ctx.beginPath(); ctx.arc(f.x + Math.cos(a) * rr * 0.6, f.y + Math.sin(a) * rr * 0.6, rr * 0.65, 0, TAU); ctx.fill();
+      }
+    } else if (f.kind === 'spiral') {                  // Rasengan swirl
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = '#7FD8FF';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      for (let i = 0; i <= 60; i++) {
+        const a = i / 60 * TAU * 3 + t * 12;
+        const rr = f.r * (i / 60) * (0.5 + t);
+        ctx.lineTo(f.x + Math.cos(a) * rr, f.y + Math.sin(a) * rr);
+      }
+      ctx.stroke();
+    }
+  }
+  for (const f of S.fx) {
+    if (f.kind !== 'float') continue;
+    const t = 1 - f.life / f.max;
+    const pop = t < 0.12 ? 0.5 + 0.5 * easeOutBack(t / 0.12) : 1;
+    ctx.globalAlpha = t < 0.75 ? 1 : (1 - t) / 0.25;
+    const y = f.y - 36 * easeOut(t), x = clamp(f.x, 100, LW - 100);
+    fitFont(ctx, f.text, 320, f.size * pop, 700, SERIF);
+    glowText(ctx, f.text, x, y, '#FFFFFF', f.color, 5);
+  }
+  ctx.restore();
+}
+
+// Counter, top-left.
+function drawStats() {
+  const rows = [
+    ['VILLAINS DEFEATED', `${S.defeated}/${TOTAL_VILLAINS}`],
+    ['CLONES MADE', String(S.made)],
+    ['CLONES LOST', String(S.lost)],
+    ['MOST AT ONCE', String(S.peak)],
+  ];
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = `700 12px ${FONT}`;
+  let y = L.statsY;
+  for (const [label, val] of rows) {
+    ctx.fillStyle = '#F5D7DC';
+    ctx.fillText(label, 14, y);
+    const x = 14 + ctx.measureText(label + ' ').width;
+    ctx.fillStyle = ORANGE;
+    ctx.fillText(val, x, y);
+    y += 16;
+  }
+  ctx.restore();
+}
+
+// Round countdown as a red seal stamp, top-center.
+function drawTimer() {
+  const secs = Math.max(0, Math.ceil(S.clock));
+  const text = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  const urgent = !S.timeUp && S.clock <= 10;
+  const pulse = urgent ? 1 + 0.12 * Math.pow(S.clock - Math.floor(S.clock), 3) : 1;
+  ctx.save();
+  ctx.translate(L.cx, L.timerY);
+  ctx.scale(pulse, pulse);
+  ctx.rotate(-0.03);
+  roundRect(ctx, -60, -27, 120, 54, 8);
+  ctx.fillStyle = urgent || S.timeUp ? '#FF1E3C' : '#B30A24';
+  ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = '#F5D7DC'; ctx.stroke();
+  roundRect(ctx, -54, -21, 108, 42, 5);
+  ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `700 34px ${SERIF}`;
+  ctx.fillStyle = '#FFF4F5';
+  ctx.fillText(text, 0, 2);
+  ctx.restore();
+}
+
+// Live clone count, top-right: a Naruto head and a big number.
+function drawCount() {
+  const n = S.clones.length;
+  const sp = getSprite('naruto', TUNING.cloneR);
+  const x = LW - 110, y = L.countY;
+  const k = 1.6;
+  ctx.drawImage(sp.canvas, x - sp.size * k / 2, y - sp.size * k / 2, sp.size * k, sp.size * k);
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.font = `700 34px ${SERIF}`;
+  glowText(ctx, `×${n}`, x + 26, y + 2, '#FFFFFF', ORANGE, 5);
+  ctx.restore();
+}
+
+// The hook: white lead-in, then big orange brush-style lines.
+function drawTitle() {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  fitFont(ctx, HOOK[0], 480, 24, 700, FONT);
+  glowText(ctx, HOOK[0], L.cx, L.title1, '#FFFFFF', '#FF2D55', 4);
+  [L.title2, L.title3].forEach((y, i) => {
+    const text = HOOK[i + 1];
+    fitFont(ctx, text, 490, 46, 800, SERIF);
+    glowText(ctx, text, L.cx, y, i ? '#FFFFFF' : ORANGE, i ? '#FF2D55' : ORANGE, 7);
+  });
+  ctx.restore();
+}
+
+function drawBanner() {
+  const B = S.banner;
+  if (!B) return;
+  const t = 1 - B.life / B.max;
+  const fadeOut = Math.min(1, B.life / 0.4);
+  const pop = t < 0.12 ? 0.3 + 0.7 * easeOutBack(t / 0.12) : 1;
+  ctx.save();
+  ctx.globalAlpha = fadeOut;
+  ctx.translate(L.cx, L.acy - 10);
+  ctx.scale(pop, pop);
+  ctx.fillStyle = 'rgba(10,0,4,0.72)';
+  ctx.fillRect(-LW / 2, -58, LW, B.big ? 150 : 118);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  fitFont(ctx, B.text, 470, B.big ? 96 : 52, 800, SERIF);
+  glowText(ctx, B.text, 0, B.big ? -2 : -12, '#FFFFFF', B.color, 8);
+  if (B.sub) {
+    fitFont(ctx, B.sub, 470, 22, 700, SERIF);
+    glowText(ctx, B.sub, 0, B.big ? 66 : 34, '#FFFFFF', B.color, 4);
+  }
+  ctx.restore();
+}
+
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(backdrop, 0, 0);
+  const sx = S.shake ? rand(-1, 1) * S.shake : 0, sy = S.shake ? rand(-1, 1) * S.shake : 0;
+  ctx.setTransform(scale, 0, 0, scale, sx * scale, sy * scale);
+
+  drawAsh();
+  drawMoon();
+  drawClones();
+  for (const v of S.villains) if (v.alive) drawVillain(v);
+  drawFx();
+  drawStats();
+  drawTimer();
+  drawCount();
+  drawTitle();
+
+  if (S.flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${S.flash})`;
+    ctx.fillRect(-20, -20, LW + 40, LH + 40);
+  }
+  drawBanner();
+
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  if (S.invert > 0) {                                  // glitchy color-invert flash
+    ctx.globalCompositeOperation = 'difference';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, LW, LH);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  // Black bands (drawn last, unshaken, so nothing spills into TikTok's UI zones)
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, LW, L.sceneTop);
+  ctx.fillRect(0, L.sceneBottom, LW, LH - L.sceneBottom);
+}
+
+/* =====================================================================
+   VIDEO RECORDING
+   Records one full round straight from the canvas (1080×1920, 60fps, with
+   sound), keeps going a few seconds into the freeze, then saves the file.
+   ===================================================================== */
+
+const params = new URLSearchParams(location.search);
+// ?upload=/path  → POST the finished video to this same-origin path instead of
+// downloading it (used by render.py). ?autorecord → start on load.
+const UPLOAD_PATH = /^\/(?!\/)/.test(params.get('upload') || '') ? params.get('upload') : null;
+
+const Recorder = {
+  on: false, rec: null, chunks: [], tail: 0, startedAt: 0, frames: 0,
+  TAIL_SECONDS: 3.5,        // how long to keep filming the frozen end screen
+
+  // Best format this browser can record: MP4 (H.264/AAC) first, WebM fallback.
+  pickMime() {
+    const types = [
+      'video/mp4;codecs=avc1.64002A,mp4a.40.2',
+      'video/mp4;codecs=avc1,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+    return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  },
+
+  start() {
+    if (this.on) return;
+    if (!window.MediaRecorder || !canvas.captureStream) {
+      alert("This browser can't record video. Try Chrome or Safari on a computer.");
+      return;
+    }
+    Sound.unlock();
+    this.on = true;
+    resize();                 // lock the canvas to 1080×1920
+    startRound();
+    draw();
+
+    const stream = canvas.captureStream(60);
+    const audio = Sound.recordStream();
+    if (audio) audio.getAudioTracks().forEach(t => stream.addTrack(t));
+
+    const mimeType = this.pickMime();
+    const opts = { videoBitsPerSecond: 8_000_000, audioBitsPerSecond: 192_000 };
+    if (mimeType) opts.mimeType = mimeType;
+    this.rec = new MediaRecorder(stream, opts);
+    this.chunks = [];
+    this.rec.ondataavailable = e => { if (e.data.size) this.chunks.push(e.data); };
+    this.rec.onstop = () => this.save();
+    this.rec.start(1000);
+
+    this.tail = this.TAIL_SECONDS;
+    this.startedAt = performance.now();
+    this.frames = 0;
+    $('recBtn').classList.add('on');
+    $('recBtn').textContent = '⏹';
+    $('recBadge').hidden = false;
+  },
+
+  // Called every frame once the round is over: film the freeze, then stop.
+  tick(rdt) {
+    if (!this.rec) return;
+    this.tail -= rdt;
+    if (this.tail <= 0) this.stop();
+  },
+
+  stop() {
+    if (this.rec && this.rec.state !== 'inactive') this.rec.stop();
+  },
+
+  save() {
+    const type = this.rec.mimeType || 'video/webm';
+    const blob = new Blob(this.chunks, { type });
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const name = `naruto-${stamp}.${ext}`;
+    const secs = (performance.now() - this.startedAt) / 1000;
+    const fps = (this.frames / secs).toFixed(1);
+
+    this.rec = null;
+    this.chunks = [];
+    this.on = false;
+    resize();                 // back to the normal screen layout
+    $('recBtn').classList.remove('on');
+    $('recBtn').textContent = '⏺';
+    $('recBadge').hidden = true;
+
+    if (UPLOAD_PATH) {
+      fetch(`${UPLOAD_PATH}?name=${encodeURIComponent(name)}&fps=${fps}`, { method: 'POST', body: blob });
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  },
+
+  // On-screen REC badge with elapsed time.
+  frame() {
+    if (!this.on) return;
+    this.frames++;
+    const s = Math.floor((performance.now() - this.startedAt) / 1000);
+    const text = `● REC ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    const badge = $('recBadge');
+    if (badge.textContent !== text) badge.textContent = text;
+  },
+};
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+
+$('recBtn').addEventListener('click', () => (Recorder.on ? Recorder.stop() : Recorder.start()));
+
+// Tap inside the moon to make a shadow clone there
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width * LW;
+  const y = (e.clientY - rect.top) / rect.height * LH;
+  if (!S.timeUp && Math.hypot(x - L.acx, y - L.acy) < L.R - TUNING.cloneR && S.clones.length < TUNING.cloneCap) {
+    S.clones.push(makeClone(x, y, rand(-100, 100), rand(-100, 100)));
+    S.made++;
+    puff(x, y, 1.2);
+    Sound.poof();
+  }
+});
+
+// Audio starts on load if the browser allows it. If it's blocked, any touch,
+// click or key press starts it (different browsers count different events).
+for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) {
+  window.addEventListener(ev, () => Sound.unlock(), { capture: true });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Sound.unlock(); });
+
+const muteBtn = $('muteBtn');
+function toggleMute() {
+  Sound.setMuted(!Sound.muted);
+  muteBtn.textContent = Sound.muted ? '🔇' : '🔊';
+}
+muteBtn.addEventListener('click', toggleMute);
+
+const panel = $('panel');
+$('setBtn').addEventListener('click', () => { panel.hidden = !panel.hidden; });
+$('closeBtn').addEventListener('click', () => { panel.hidden = true; });
+$('resetBtn').addEventListener('click', () => { startRound(); panel.hidden = true; });
+
+// Bind a slider to a Settings key with a formatted readout
+function bindSlider(inputId, labelId, key, fmtVal) {
+  const input = $(inputId), label = $(labelId);
+  input.value = Settings[key];
+  label.textContent = fmtVal(Settings[key]);
+  input.addEventListener('input', () => {
+    Settings[key] = parseFloat(input.value);
+    label.textContent = fmtVal(Settings[key]);
+  });
+}
+bindSlider('inSwirl', 'vSwirl', 'swirl', v => v.toFixed(2) + '×');
+bindSlider('inSplit', 'vSplit', 'split', v => v.toFixed(2) + '×');
+
+// Keyboard shortcuts for desktop recording: M = mute, R = restart the round
+window.addEventListener('keydown', e => {
+  if (e.key === 'm' || e.key === 'M') toggleMute();
+  if (e.key === 'r' || e.key === 'R') startRound();
+});
+
+window.addEventListener('resize', resize);
+
+/* =====================================================================
+   MAIN LOOP
+   ===================================================================== */
+
+resize();
+startRound();
+Sound.unlock();     // try to start sound right away
+if (params.has('autorecord')) Recorder.start();
+
+let lastT = performance.now();
+function frame(now) {
+  // Never negative (the first rAF timestamp can be earlier than lastT), capped after tab switches
+  const rdt = clamp((now - lastT) / 1000, 0, 1 / 20);
+  lastT = now;
+  update(rdt);
+  draw();
+  Recorder.frame();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

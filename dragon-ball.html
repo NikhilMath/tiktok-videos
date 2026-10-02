@@ -1,0 +1,1751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#F3E9D2">
+<title>Dragon Ball: Who Will Win the Tournament?</title>
+<style>
+  /* ---------- Page shell: no scrolling, stage centered ---------- */
+  html, body {
+    margin: 0; height: 100%; background: #000; overflow: hidden;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+
+  /* The stage is sized by JS to a 9:16 (or taller) portrait box.
+     --u = CSS pixels per logical unit (logical width is 540). */
+  #stage { position: relative; --u: 1px; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  /* ---------- Recording indicator (on screen only, not in the video) ---------- */
+  #recBadge {
+    position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + var(--u) * 14);
+    transform: translateX(-50%); padding: calc(var(--u) * 6) calc(var(--u) * 14);
+    border-radius: 999px; background: rgba(230, 30, 40, 0.92); color: #fff;
+    font: 800 calc(var(--u) * 14) system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: 0.08em; pointer-events: none;
+  }
+  #recBadge[hidden] { display: none; }
+
+  /* ---------- Buttons (record / mute / settings), comic style ---------- */
+  #btns {
+    position: absolute;
+    right: calc(var(--u) * 12);
+    top: calc(env(safe-area-inset-top, 0px) + var(--u) * 10);
+    display: flex; gap: calc(var(--u) * 8);
+  }
+  .iconBtn {
+    width: calc(var(--u) * 38); height: calc(var(--u) * 38);
+    border-radius: 50%; border: 3px solid #141414;
+    background: #FFFDF5; color: #141414; cursor: pointer;
+    font-size: calc(var(--u) * 16); line-height: 1; padding: 0;
+    box-shadow: calc(var(--u) * 3) calc(var(--u) * 3) 0 #141414;
+  }
+  #recBtn.on { background: #FF3B30; color: #fff; }
+
+  /* ---------- Settings panel ---------- */
+  #panel {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(-1deg);
+    width: calc(var(--u) * 380); padding: calc(var(--u) * 20);
+    background: #FFFDF5; border: 4px solid #141414; border-radius: calc(var(--u) * 6);
+    box-shadow: calc(var(--u) * 8) calc(var(--u) * 8) 0 #141414;
+    color: #141414; font: 700 calc(var(--u) * 15) system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  #panel[hidden] { display: none; }
+  #panel h2 {
+    margin: 0 0 calc(var(--u) * 14); text-align: center; letter-spacing: 0.06em;
+    font: 400 calc(var(--u) * 28) Impact, "Arial Black", sans-serif; color: #FF8A00;
+    -webkit-text-stroke: 1.5px #141414;
+  }
+  #panel label { display: block; margin-bottom: calc(var(--u) * 14); }
+  #panel label span { float: right; color: #E8282B; }
+  #panel input[type=range] { width: 100%; margin-top: calc(var(--u) * 6); accent-color: #FF8A00; }
+  .row { display: flex; gap: calc(var(--u) * 10); margin-top: calc(var(--u) * 6); }
+  .row button {
+    flex: 1; padding: calc(var(--u) * 10); cursor: pointer; border-radius: calc(var(--u) * 4);
+    font: 400 calc(var(--u) * 18) Impact, "Arial Black", sans-serif; letter-spacing: 0.04em;
+    color: #141414; background: #FFE14D; border: 3px solid #141414;
+    box-shadow: calc(var(--u) * 3) calc(var(--u) * 3) 0 #141414;
+  }
+  #closeBtn { background: #FFFDF5; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="recBadge" hidden>● REC 0:00</div>
+
+  <div id="btns">
+    <button class="iconBtn" id="recBtn" aria-label="Record a video">⏺</button>
+    <button class="iconBtn" id="muteBtn" aria-label="Toggle sound">🔊</button>
+    <button class="iconBtn" id="setBtn" aria-label="Settings">⚙️</button>
+  </div>
+
+  <div id="panel" hidden>
+    <h2>SETTINGS</h2>
+    <label>Fighter speed <span id="vSpeed"></span>
+      <input id="inSpeed" type="range" min="150" max="600" step="10">
+    </label>
+    <label>Damage <span id="vDamage"></span>
+      <input id="inDamage" type="range" min="0.3" max="3" step="0.05">
+    </label>
+    <label>Dragon Ball every <span id="vBall"></span>
+      <input id="inBall" type="range" min="4" max="30" step="1">
+    </label>
+    <div class="row">
+      <button id="resetBtn">RESET</button>
+      <button id="closeBtn">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   CONFIG
+   ===================================================================== */
+
+const TAU = Math.PI * 2;
+const DEG = Math.PI / 180;
+const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+const COMIC = 'Impact, "Arial Black", "Helvetica Neue", sans-serif';
+const INK = '#141414';
+const PAPER = '#F3E9D2';
+
+// Length of one round. When the clock hits 0:00 everything freezes in place.
+const ROUND_SECONDS = 120;   // 2:00
+
+// Solid black bands at the top and bottom so TikTok's UI never covers the
+// action: the top bar ("Following | For You") and the caption / username area.
+// In the 1920px video: 220px on top, 380px at the bottom.
+const TOP_SPACE = 110;
+const BOTTOM_SPACE = 190;
+
+// The hook: a comment prompt + question at the top for retention.
+const HOOK = ['Comment below 👇', 'Who will win the', 'TOURNAMENT?'];
+
+// Combat tuning (see README for how these were chosen).
+const START_HP = 100;
+const START_RADIUS = 25;
+const BASE_DAMAGE = 0.95;     // per clash, before speed / power / time scaling (tuned so the last K.O. lands ~1:15–2:00)
+const HOMING = 220;           // how hard fighters steer toward the nearest opponent
+const KO_POWER = 1.2;         // a K.O. multiplies the winner's power…
+const KO_HEAL = 30;           // …and heals them
+const BALL_POWER = 1.3;       // grabbing a Dragon Ball multiplies power…
+const BALL_HEAL = 35;         // …and heals
+const PL_PER_POWER = 80;      // power 100 → power level 8,000
+
+// User-tweakable settings (bound to the sliders).
+const Settings = { speed: 320, damage: 1.0, ballEvery: 14 };
+
+/* Transformations unlocked by grabbing Dragon Balls, in order.
+   Any field left out keeps the fighter's normal look. */
+const SSJ = { label: 'SUPER SAIYAN!', hair: '#FFD400', eyes: '#16C8C0', aura: '#FFD400' };
+const SSJ_BLUE = { label: 'SUPER SAIYAN BLUE!', hair: '#2EA8FF', eyes: '#2EA8FF', aura: '#2EA8FF' };
+
+/* The 12 fighters. style picks the face template in FACE_STYLES;
+   color is the token / HP / effect color. */
+const FIGHTERS = [
+  { name: 'Goku',    style: 'goku',    skin: '#FFD9B3', hair: '#1A1A1A', color: '#FF7A00', forms: [SSJ, SSJ_BLUE] },
+  { name: 'Vegeta',  style: 'vegeta',  skin: '#FFD9B3', hair: '#1A1A1A', color: '#2E5BFF', forms: [SSJ, SSJ_BLUE] },
+  { name: 'Gohan',   style: 'gohan',   skin: '#FFD9B3', hair: '#1A1A1A', color: '#8E44AD',
+    forms: [SSJ, { label: 'BEAST GOHAN!', hair: '#E9ECF5', eyes: '#E8282B', aura: '#C77DFF' }] },
+  { name: 'Trunks',  style: 'trunks',  skin: '#FFD9B3', hair: '#B9A6E8', color: '#3D7BFF', forms: [SSJ] },
+  { name: 'Broly',   style: 'broly',   skin: '#FFD9B3', hair: '#1A1A1A', color: '#3DBE4A',
+    forms: [{ label: 'LEGENDARY SUPER SAIYAN!', hair: '#B6F23A', eyes: '#FFFFFF', aura: '#7CFF4A' }] },
+  { name: 'Krillin', style: 'krillin', skin: '#FFD9B3', color: '#FF9F1C', forms: [] },
+  { name: 'Piccolo', style: 'piccolo', skin: '#6BC04B', color: '#5B2C83',
+    forms: [{ label: 'ORANGE PICCOLO!', skin: '#FF8A3D', aura: '#FF8A3D' }] },
+  { name: 'Frieza',  style: 'frieza',  skin: '#F4F1F8', color: '#B061FF',
+    forms: [{ label: 'GOLDEN FRIEZA!', skin: '#FFD400', aura: '#FFD400' }] },
+  { name: 'Cell',    style: 'cell',    skin: '#7DCB55', color: '#2E8B57', forms: [{ label: 'PERFECT CELL!', aura: '#9BEA2E' }] },
+  { name: 'Buu',     style: 'buu',     skin: '#FF8FC0', color: '#FF4DA6', forms: [] },
+  { name: 'Beerus',  style: 'beerus',  skin: '#9B7BC7', color: '#7B3FA0', forms: [{ label: 'HAKAI!', aura: '#B061FF' }] },
+  { name: 'Jiren',   style: 'jiren',   skin: '#B5B7C4', color: '#E8282B', forms: [{ label: 'FULL POWER!', aura: '#E8282B' }] },
+];
+
+const HIT_WORDS = ['POW!', 'BAM!', 'WHAM!', 'KRAK!', 'BOOM!', 'SMASH!'];
+
+/* =====================================================================
+   CANVAS, SIZING & LAYOUT
+   ===================================================================== */
+
+const stage = document.getElementById('stage');
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const LW = 540;   // logical width; everything is laid out in these units
+let LH = 960;     // logical height (grows on phones taller than 9:16)
+let scale = 1;    // device pixels per logical unit
+const L = {};     // layout
+
+// Laid out top-down inside a 960-tall block (centered on taller phone screens):
+// black band, then the comic panel (counter, timer, hook, stage, roster), then black band.
+function layout() {
+  const block = (LH - 960) / 2;
+  const top = block + TOP_SPACE;
+  L.cx = LW / 2;
+  L.panelTop = top;                   // paper panel between the black bands
+  L.panelBottom = block + 960 - BOTTOM_SPACE;
+  L.statsY = top + 10;                // counter, top-left
+  L.timerY = top + 36;                // round countdown, top-center
+  L.title1 = top + 98;                // hook: small lead-in line
+  L.title2 = L.title1 + 40;           // hook: big logo-style lines
+  L.title3 = L.title2 + 48;
+  L.ax0 = 28; L.ax1 = LW - 28;        // tournament stage
+  L.ay0 = L.title3 + 40;
+  L.rosterY = L.panelBottom - 32;     // one row of all 12 fighters under the stage
+  L.ay1 = L.rosterY - 34;
+  L.acx = (L.ax0 + L.ax1) / 2; L.acy = (L.ay0 + L.ay1) / 2;
+}
+
+const VIDEO_W = 1080;   // recorded video is 1080×1920 (TikTok's native size)
+
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  let cssW, cssH;
+  if (Recorder.on) {                  // recording: exact 9:16 frame, fitted to the window
+    cssH = Math.min(wh, ww * 16 / 9); cssW = cssH * 9 / 16; LH = 960;
+  } else if (wh / ww >= 16 / 9) {     // tall phone: fill the whole screen
+    cssW = ww; cssH = wh; LH = LW * wh / ww;
+  } else {                            // wider screen: 9:16 box, letterboxed
+    cssH = wh; cssW = wh * 9 / 16; LH = 960;
+  }
+  stage.style.width = cssW + 'px';
+  stage.style.height = cssH + 'px';
+  stage.style.setProperty('--u', (cssW / LW) + 'px');
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);   // cap for phone performance
+  scale = Recorder.on ? VIDEO_W / LW : (cssW / LW) * dpr;
+  canvas.width = Math.round(LW * scale);
+  canvas.height = Math.round(LH * scale);
+
+  // Keep fighters and Dragon Balls in place relative to the stage.
+  const oldAy0 = L.ay0;
+  layout();
+  if (oldAy0 !== undefined) {
+    for (const o of [...S.fighters, ...S.balls]) o.y += L.ay0 - oldAy0;
+  }
+
+  sprites.clear();                    // tokens are cached at device resolution
+  buildPaper();
+}
+
+// shadowBlur ignores the canvas transform, so scale it manually.
+const blur = v => v * scale;
+
+/* =====================================================================
+   HELPERS
+   ===================================================================== */
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[(Math.random() * arr.length) | 0];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeOutBack = t => 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2);
+const powerLevel = f => Math.round(f.power * PL_PER_POWER);
+const fmt = n => n.toLocaleString('en-US');
+
+function rgba(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+// Set a font that fits `text` into maxW, starting from maxSize.
+function fitFont(g, text, maxW, maxSize, weight, family = FONT) {
+  let size = maxSize;
+  g.font = `${weight} ${size}px ${family}`;
+  const w = g.measureText(text).width;
+  if (w > maxW) {
+    size = Math.max(5, size * maxW / w);
+    g.font = `${weight} ${size}px ${family}`;
+  }
+  return size;
+}
+
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+
+// Comic text: thick ink outline, then fill.
+function inkText(g, text, x, y, fill, outline = 6) {
+  g.lineJoin = 'round';
+  g.lineWidth = outline;
+  g.strokeStyle = INK;
+  g.strokeText(text, x, y);
+  g.fillStyle = fill;
+  g.fillText(text, x, y);
+}
+
+/* =====================================================================
+   SOUND (Web Audio, synthesized: punchy fight sounds)
+   ===================================================================== */
+
+const Sound = {
+  ctx: null, out: null, comp: null, speaker: null, recDest: null, noise: null,
+  muted: false, lastHit: 0,
+
+  // Called on page load (starts immediately where the browser allows autoplay)
+  // and again on every interaction, so audio starts the moment it's permitted.
+  // Graph: sounds → out → compressor → speaker (mute switch) → speakers
+  //                                  ↘ recDest (video recording, ignores mute)
+  unlock() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      this.ctx = new AC();
+      this.comp = this.ctx.createDynamicsCompressor();
+      this.out = this.ctx.createGain();
+      this.out.gain.value = 0.7;
+      this.speaker = this.ctx.createGain();
+      this.speaker.gain.value = this.muted ? 0 : 1;
+      this.out.connect(this.comp);
+      this.comp.connect(this.speaker);
+      this.speaker.connect(this.ctx.destination);
+      // One second of white noise, reused for every hit
+      const len = this.ctx.sampleRate;
+      this.noise = this.ctx.createBuffer(1, len, len);
+      const d = this.noise.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    // 'suspended' = blocked by autoplay rules; 'interrupted' = iOS paused it (e.g. a call)
+    if (this.ctx.state !== 'running' && this.ctx.state !== 'closed') this.ctx.resume().catch(() => {});
+  },
+
+  // Audio stream for the video recorder (sound is recorded even when muted).
+  recordStream() {
+    if (!this.ctx || !this.ctx.createMediaStreamDestination) return null;
+    if (!this.recDest) {
+      this.recDest = this.ctx.createMediaStreamDestination();
+      this.comp.connect(this.recDest);
+    }
+    return this.recDest.stream;
+  },
+
+  get running() { return !!this.ctx && this.ctx.state === 'running'; },
+
+  setMuted(m) {
+    this.muted = m;
+    if (this.speaker) this.speaker.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.02);
+  },
+
+  get ready() { return this.running && (!this.muted || Recorder.on); },
+
+  // One enveloped oscillator note (optionally sweeping to freqTo).
+  note(freq, when, dur, type = 'sine', vol = 0.2, freqTo = 0) {
+    const c = this.ctx, t = c.currentTime + when;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t);
+    if (freqTo) o.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.out);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+
+  // Filtered noise burst (the "crack" of a punch, explosions).
+  burst(dur, freq, q, vol, freqTo = 0, when = 0) {
+    const c = this.ctx, t = c.currentTime + when;
+    const src = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    src.buffer = this.noise;
+    f.type = 'bandpass';
+    f.frequency.setValueAtTime(freq, t);
+    if (freqTo) f.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    f.Q.value = q;
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(this.out);
+    src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.05);
+  },
+
+  hit(strength, crit) {
+    if (!this.ready) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastHit < 0.05) return;           // throttle so pile-ups don't buzz
+    this.lastHit = now;
+    const s = clamp(strength, 0.2, 1);
+    this.burst(0.09, rand(900, 1500), 1.2, 0.35 * s);
+    this.note(150, 0, 0.12, 'sine', 0.5 * s, 55);     // body thump
+    if (crit) this.burst(0.18, 3000, 2, 0.3, 800);
+  },
+
+  ko() {
+    if (!this.ready) return;
+    this.burst(0.8, 2400, 0.8, 0.6, 120);
+    this.note(110, 0, 0.9, 'sine', 0.8, 28);
+    [523.25, 392, 311.13, 261.63].forEach((f, i) => this.note(f, 0.05 + i * 0.09, 0.2, 'square', 0.05));
+  },
+
+  powerUp() {
+    if (!this.ready) return;
+    this.note(160, 0, 0.8, 'sawtooth', 0.12, 900);
+    this.note(240, 0.05, 0.75, 'square', 0.06, 1200);
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => this.note(f, 0.45 + i * 0.05, 0.6, 'triangle', 0.08));
+  },
+
+  dragonBall() {
+    if (!this.ready) return;
+    [1318.51, 1975.53, 2637.02].forEach((f, i) => this.note(f, i * 0.04, 0.9, 'sine', 0.08));
+  },
+
+  over9000() {
+    if (!this.ready) return;
+    [392, 523.25, 659.25, 783.99, 1046.5, 1318.51].forEach((f, i) => this.note(f, i * 0.06, 0.25, 'square', 0.06));
+  },
+
+  winner() {
+    if (!this.ready) return;
+    [[523.25, 0], [659.25, 0.15], [783.99, 0.3], [1046.5, 0.45]].forEach(([f, w]) => this.note(f, w, 0.5, 'square', 0.07));
+    [261.63, 329.63, 392, 523.25].forEach(f => this.note(f, 0.6, 1.8, 'triangle', 0.1));
+  },
+
+  tick() {
+    if (!this.ready) return;
+    this.note(1760, 0, 0.08, 'square', 0.05);
+  },
+
+  // Gong when the round ends
+  timeUp() {
+    if (!this.ready) return;
+    [110, 163.5, 247, 330.5, 441].forEach((f, i) => this.note(f, 0, 3.2 - i * 0.4, 'sine', 0.22 / (i + 1)));
+    this.burst(0.4, 600, 0.7, 0.3, 200);
+  },
+};
+
+/* =====================================================================
+   SIMULATION STATE
+   ===================================================================== */
+
+const S = {
+  fighters: [], balls: [], fx: [],
+  flash: 0, shake: 0, banner: null,
+  slowmo: 0,            // real seconds of slow motion left
+  ballT: 0,             // sim seconds until the next Dragon Ball appears
+  ballsSpawned: 0, ballsTaken: 0, kos: 0,
+  lastBurst: 0,         // limits how many comic bursts appear at once
+  over9000: false,
+  winner: null,
+  clock: ROUND_SECONDS, lastTick: 0, timeUp: false,
+  time: 0, acc: 0,
+};
+
+const alive = () => S.fighters.filter(f => f.alive);
+
+// Fresh round: 12 fighters in a shuffled circle, all charging in random directions.
+function startRound() {
+  const slots = FIGHTERS.map((_, i) => i).sort(() => Math.random() - 0.5);
+  S.fighters = FIGHTERS.map((def, i) => {
+    const a = slots[i] / FIGHTERS.length * TAU;
+    const dir = rand(0, TAU);
+    return {
+      id: i, def,
+      x: L.acx + Math.cos(a) * 170, y: L.acy + Math.sin(a) * (L.ay1 - L.ay0) * 0.33,
+      vx: Math.cos(dir) * Settings.speed, vy: Math.sin(dir) * Settings.speed,
+      r: START_RADIUS, m: START_RADIUS ** 2,
+      hp: START_HP, maxHp: START_HP, power: 100,
+      formIdx: 0, form: null, aura: null,
+      alive: true, flash: 0, pop: 0, kos: 0, lastHit: {},
+    };
+  });
+  S.balls.length = 0; S.fx.length = 0;
+  S.flash = 0; S.shake = 0; S.banner = null; S.slowmo = 0;
+  S.ballT = 6; S.ballsSpawned = 0; S.ballsTaken = 0; S.kos = 0;
+  S.over9000 = false; S.winner = null;
+  S.clock = Number(params.get('seconds')) || ROUND_SECONDS;   // ?seconds=10 for quick tests
+  S.lastTick = 0; S.timeUp = false; S.acc = 0;
+}
+
+/* =====================================================================
+   PHYSICS & COMBAT (top-down: no gravity, fighters hunt each other)
+   ===================================================================== */
+
+const STEP = 1 / 240;   // fixed physics step (4 substeps per 60fps frame)
+
+function step(dt) {
+  const fs = alive();
+  const ramp = 1 + 1.5 * clamp(1 - S.clock / ROUND_SECONDS, 0, 1);   // fights get deadlier over time
+
+  // Steer: home in on the nearest opponent, wobble a little, hold cruising speed
+  for (const f of fs) {
+    let best = null, bd = Infinity;
+    for (const o of fs) {
+      if (o === f) continue;
+      const d = (o.x - f.x) ** 2 + (o.y - f.y) ** 2;
+      if (d < bd) { bd = d; best = o; }
+    }
+    if (best) {
+      const d = Math.sqrt(bd) || 1;
+      f.vx += (best.x - f.x) / d * HOMING * dt;
+      f.vy += (best.y - f.y) / d * HOMING * dt;
+    }
+    const wob = rand(-1, 1) * 1.6 * dt, cs = Math.cos(wob), sn = Math.sin(wob);
+    [f.vx, f.vy] = [f.vx * cs - f.vy * sn, f.vx * sn + f.vy * cs];
+
+    const target = Settings.speed * (f.aura ? 1.12 : 1);
+    const sp = Math.hypot(f.vx, f.vy) || 1;
+    const k = 1 + (target / sp - 1) * Math.min(1, dt * 2);
+    f.vx *= k; f.vy *= k;
+
+    f.x += f.vx * dt;
+    f.y += f.vy * dt;
+  }
+
+  // Fighter vs fighter: elastic bounce + both sides take damage
+  for (let i = 0; i < fs.length; i++) {
+    const a = fs[i];
+    if (!a.alive) continue;
+    for (let j = i + 1; j < fs.length; j++) {
+      const b = fs[j];
+      if (!b.alive) continue;
+      const dx = b.x - a.x, dy = b.y - a.y, rs = a.r + b.r;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= rs * rs) continue;
+
+      const d = Math.sqrt(d2) || 0.001;
+      const nx = dx / d, ny = dy / d, overlap = rs - d;
+      const inv = 1 / (a.m + b.m);
+      a.x -= nx * overlap * b.m * inv; a.y -= ny * overlap * b.m * inv;
+      b.x += nx * overlap * a.m * inv; b.y += ny * overlap * a.m * inv;
+
+      const rv = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+      if (rv < 0) {
+        const jImp = -2 * rv / (1 / a.m + 1 / b.m);
+        a.vx -= jImp / a.m * nx; a.vy -= jImp / a.m * ny;
+        b.vx += jImp / b.m * nx; b.vy += jImp / b.m * ny;
+      }
+
+      // One exchange of blows per pair every 0.3s
+      const now = S.time;
+      if (now - (a.lastHit[b.id] || -1) > 0.3) {
+        a.lastHit[b.id] = b.lastHit[a.id] = now;
+        clash(a, b, Math.max(0, -rv), a.x + nx * a.r, a.y + ny * a.r, ramp);
+      }
+    }
+  }
+
+  // Stage walls
+  for (const f of fs) {
+    if (!f.alive) continue;
+    const x0 = L.ax0 + 4 + f.r, x1 = L.ax1 - 4 - f.r, y0 = L.ay0 + 4 + f.r, y1 = L.ay1 - 4 - f.r;
+    if (f.x < x0) { f.x = x0; f.vx = Math.abs(f.vx); }
+    if (f.x > x1) { f.x = x1; f.vx = -Math.abs(f.vx); }
+    if (f.y < y0) { f.y = y0; f.vy = Math.abs(f.vy); }
+    if (f.y > y1) { f.y = y1; f.vy = -Math.abs(f.vy); }
+  }
+
+  // Dragon Ball pickups
+  for (const ball of S.balls) {
+    if (ball.taken) continue;
+    for (const f of fs) {
+      if (f.alive && (f.x - ball.x) ** 2 + (f.y - ball.y) ** 2 < (f.r + 12) ** 2) {
+        ball.taken = true;
+        grabBall(f, ball);
+        break;
+      }
+    }
+  }
+  S.balls = S.balls.filter(b => !b.taken);
+}
+
+// Two fighters collide: each deals damage scaled by impact, power ratio and time.
+function clash(a, b, impact, x, y, ramp) {
+  const speedK = 0.6 + Math.min(impact, 900) / 900 * 0.8;
+  const base = BASE_DAMAGE * Settings.damage * ramp * speedK;
+  const crit = Math.random() < 0.12;
+  const toB = base * Math.pow(a.power / b.power, 0.8) * (crit ? 2.2 : 1);
+  const toA = base * Math.pow(b.power / a.power, 0.8);
+
+  b.hp -= toB; a.hp -= toA;
+  a.flash = b.flash = 0.09;
+  addFloat(b.x, b.y - b.r - 8, '-' + Math.ceil(toB), crit ? '#E8282B' : '#FFFFFF', crit ? 18 : 13, 0.7);
+  addFloat(a.x, a.y - a.r - 8, '-' + Math.ceil(toA), '#FFFFFF', 13, 0.7);
+
+  const big = impact > 320 || crit;
+  if (big && S.time - S.lastBurst > 0.12) {
+    S.lastBurst = S.time;
+    addBurst(x, y, crit ? 'CRITICAL!' : pick(HIT_WORDS), crit ? 1.25 : 0.8 + Math.min(impact, 900) / 1500);
+  }
+  addSparks(x, y, crit ? 14 : 7, ['#FFE14D', '#FFFFFF', INK], 260);
+  S.shake = Math.max(S.shake, crit ? 9 : 2 + impact / 220);
+  Sound.hit(impact / 700, crit);
+
+  if (b.hp <= 0) knockOut(b, a);
+  if (a.hp <= 0 && a.alive) knockOut(a, b.alive ? b : null);
+}
+
+function knockOut(loser, winner) {
+  loser.alive = false;
+  loser.hp = 0;
+  S.kos++;
+
+  // Explosion where they fell
+  addRing(loser.x, loser.y, loser.r, loser.r * 4, '#FF8A00', 0.6, 10);
+  addRing(loser.x, loser.y, loser.r, loser.r * 2.6, INK, 0.45, 6);
+  addSparks(loser.x, loser.y, 30, ['#FF8A00', '#FFE14D', INK, loser.def.color], 520);
+  addBurst(loser.x, loser.y, 'K.O.!', 1.6);
+  S.shake = 16;
+  S.flash = Math.max(S.flash, 0.25);
+  Sound.ko();
+
+  if (winner && winner.alive) {
+    winner.kos++;
+    winner.power *= KO_POWER;
+    winner.hp = Math.min(winner.maxHp, winner.hp + KO_HEAL);
+    winner.r = Math.min(44, winner.r + 2);
+    winner.m = winner.r ** 2;
+    checkOver9000(winner);
+  }
+
+  const left = alive();
+  if (left.length === 2) S.slowmo = Math.max(S.slowmo, 1.2);
+  if (left.length === 1 && !S.winner) {
+    S.winner = left[0];
+    S.winner.aura = S.winner.aura || '#FFD400';
+    S.slowmo = 2.0;                                 // final K.O. in slow motion
+    S.banner = { text: 'WINNER!', sub: `${S.winner.def.name} wins the tournament!`, life: 3.2, max: 3.2 };
+    Sound.winner();
+  }
+}
+
+function grabBall(f, ball) {
+  S.ballsTaken++;
+  f.power *= BALL_POWER;
+  f.hp = Math.min(f.maxHp, f.hp + BALL_HEAL);
+  let label = 'POWER UP!';
+  if (f.formIdx < f.def.forms.length) {
+    f.form = f.def.forms[f.formIdx++];
+    label = f.form.label;
+    f.aura = f.form.aura || f.def.color;
+  } else {
+    f.aura = f.aura || f.def.color;
+  }
+  f.pop = 0;                                        // re-pop the token with its new look
+  addRing(f.x, f.y, f.r, f.r * 3.5, f.aura, 0.8, 10);
+  addRing(f.x, f.y, f.r, f.r * 2.2, '#FFE14D', 0.6, 6);
+  addSparks(f.x, f.y, 24, [f.aura, '#FFE14D', '#FFFFFF'], 420);
+  addFloat(f.x, f.y - f.r - 30, label, '#FFE14D', 26, 1.8, `${f.def.name} · ${ball.stars}★ Dragon Ball`);
+  S.flash = Math.max(S.flash, 0.3);
+  S.slowmo = Math.max(S.slowmo, 0.7);
+  Sound.dragonBall();
+  Sound.powerUp();
+  checkOver9000(f);
+}
+
+function checkOver9000(f) {
+  if (S.over9000 || powerLevel(f) <= 9000) return;
+  S.over9000 = true;
+  addFloat(f.x, f.y - f.r - 60, "IT'S OVER 9000!!", '#FF8A00', 30, 2.2, `${f.def.name}: ${fmt(powerLevel(f))}`);
+  Sound.over9000();
+}
+
+function spawnBall(x, y) {
+  const stars = (S.ballsSpawned % 7) + 1;
+  if (x === undefined) {
+    for (let tries = 0; tries < 30; tries++) {
+      x = rand(L.ax0 + 40, L.ax1 - 40);
+      y = rand(L.ay0 + 40, L.ay1 - 40);
+      if (!S.fighters.some(f => f.alive && (f.x - x) ** 2 + (f.y - y) ** 2 < (f.r + 40) ** 2)) break;
+    }
+  }
+  S.ballsSpawned++;
+  S.balls.push({ x, y, stars, born: S.time, taken: false });
+  addRing(x, y, 6, 50, '#FF8A00', 0.6, 5);
+  Sound.dragonBall();
+}
+
+/* =====================================================================
+   EFFECTS
+   ===================================================================== */
+
+function addRing(x, y, r0, r1, color, life, width) {
+  S.fx.push({ kind: 'ring', x, y, r0, r1, color, life, max: life, width });
+}
+function addSparks(x, y, count, colors, speed) {
+  for (let i = 0; i < count; i++) {
+    const a = rand(0, TAU), s = rand(speed * 0.3, speed), life = rand(0.35, 0.8);
+    S.fx.push({ kind: 'spark', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                color: pick(colors), size: rand(1.5, 4), life, max: life });
+  }
+}
+// Comic starburst with a sound-effect word.
+function addBurst(x, y, word, size) {
+  S.fx.push({ kind: 'burst', x, y, word, size, rot: rand(-0.35, 0.35), life: 0.55, max: 0.55 });
+}
+function addFloat(x, y, text, color, size, life, sub) {
+  S.fx.push({ kind: 'float', x, y, text, color, size, life, max: life, sub });
+}
+
+function endRound() {
+  S.clock = 0;
+  S.timeUp = true;
+  S.slowmo = 0;
+  const left = alive().sort((a, b) => b.hp - a.hp || b.power - a.power);
+  if (left.length) {
+    S.winner = left[0];
+    S.banner = left.length === 1
+      ? { text: 'WINNER!', sub: `${S.winner.def.name} wins the tournament!`, life: 3.2, max: 3.2 }
+      : { text: 'TIME!', sub: `${S.winner.def.name} wins by decision!`, life: 3.2, max: 3.2 };
+  }
+  S.flash = 0.35;
+  Sound.timeUp();
+}
+
+/* =====================================================================
+   UPDATE
+   ===================================================================== */
+
+function update(rdt) {
+  S.time += rdt;
+
+  // Real-time timers (effects stay readable during slow-mo)
+  S.slowmo = Math.max(0, S.slowmo - rdt);
+  S.flash = Math.max(0, S.flash - rdt * 2.2);
+  S.shake = Math.max(0, S.shake - rdt * 40);
+  if (S.banner && (S.banner.life -= rdt) <= 0) S.banner = null;
+
+  for (const f of S.fx) {
+    f.life -= rdt;
+    if (f.kind === 'spark') {
+      f.x += f.vx * rdt; f.y += f.vy * rdt;
+      f.vx *= 0.93; f.vy *= 0.93;
+    }
+  }
+  S.fx = S.fx.filter(f => f.life > 0);
+  for (const f of S.fighters) {
+    f.flash = Math.max(0, f.flash - rdt);
+    f.pop = Math.min(1, f.pop + rdt / 0.3);
+  }
+
+  // Round clock (wall-clock time, so the video is exactly 2:00)
+  if (!S.timeUp) {
+    S.clock -= rdt;
+    const whole = Math.ceil(S.clock);
+    if (whole !== S.lastTick && whole <= 5 && whole > 0) Sound.tick();
+    S.lastTick = whole;
+    if (S.clock <= 0) endRound();
+  }
+  if (S.timeUp) { Recorder.tick(rdt); return; }   // frozen: nothing moves
+
+  const sdt = rdt * (S.slowmo > 0 ? 0.3 : 1);
+
+  // Dragon Balls appear one at a time (7 per round)
+  S.ballT -= sdt;
+  if (S.ballT <= 0 && S.ballsSpawned < 7 && alive().length > 1) {
+    S.ballT = Settings.ballEvery;
+    spawnBall();
+  }
+
+  // Fixed-step physics
+  S.acc += sdt;
+  let steps = 0;
+  while (S.acc >= STEP && steps < 10) { step(STEP); S.acc -= STEP; steps++; }
+  if (steps === 10) S.acc = 0;
+}
+
+/* =====================================================================
+   FACES: every fighter is drawn in code (no image files), manga style:
+   front view, thick ink outlines, flat colors. Sized to the token radius r.
+   ===================================================================== */
+
+const polar = (c, deg, d) => ({ x: c.x + Math.cos(deg * DEG) * d, y: c.y + Math.sin(deg * DEG) * d });
+
+// Fill the current path and give it a thick ink outline.
+function inked(g, r, fill, w = 0.045) {
+  g.fillStyle = fill;
+  g.fill();
+  g.lineWidth = r * w;
+  g.strokeStyle = INK;
+  g.stroke();
+}
+
+// Path for a tapered spike (hair spike, horn, ear) growing out of the head.
+// ang: direction in degrees (0 = right, 90 = down, 270 = up); len: tip distance
+// from head center; half: half-width at the base (degrees); bend: tip curl.
+function spike(g, c, ang, len, half, bend = 0, thin = 0.4) {
+  const base = c.ry * 0.8;
+  const p0 = polar(c, ang - half, base), p1 = polar(c, ang + half, base);
+  const tip = polar(c, ang + bend, len);
+  const mid = (base + len) * 0.55;
+  const k0 = polar(c, ang - half * thin + bend * 0.5, mid);
+  const k1 = polar(c, ang + half * thin + bend * 0.5, mid);
+  g.beginPath();
+  g.moveTo(p0.x, p0.y);
+  g.quadraticCurveTo(k0.x, k0.y, tip.x, tip.y);
+  g.quadraticCurveTo(k1.x, k1.y, p1.x, p1.y);
+  g.closePath();
+}
+
+function spikes(g, c, r, color, angles, lens, half, bendK = 0.25) {
+  angles.forEach((a, i) => { spike(g, c, a, r * lens[i], half, (a - 270) * bendK); inked(g, r, color); });
+}
+
+// Hair covering the top of the head down to a straight hairline.
+function cap(g, c, r, color, depth = 0.74, hairline = -0.16) {
+  g.beginPath();
+  g.ellipse(c.x, c.y + hairline * r, c.rx * 1.06, c.ry * depth, 0, Math.PI, TAU);
+  g.closePath();
+  inked(g, r, color);
+}
+
+// Bangs: spikes of hair hanging over the forehead.
+function bangs(g, c, r, color, xs, len, w = 0.07) {
+  for (const x of xs) {
+    g.beginPath();
+    g.moveTo(c.x + (x - w) * r, c.y - 0.17 * r);
+    g.lineTo(c.x + (x + 0.015) * r, c.y + (-0.16 + len) * r);
+    g.lineTo(c.x + (x + w) * r, c.y - 0.17 * r);
+    g.closePath();
+    inked(g, r, color);
+  }
+}
+
+function ears(g, c, r, skin) {
+  for (const s of [-1, 1]) {
+    g.beginPath();
+    g.ellipse(c.x + s * c.rx * 0.98, c.y + 0.05 * r, 0.065 * r, 0.1 * r, 0, 0, TAU);
+    inked(g, r, skin);
+  }
+}
+
+function head(g, c, r, skin) {
+  g.beginPath();
+  g.ellipse(c.x, c.y, c.rx, c.ry, 0, 0, TAU);
+  inked(g, r, skin);
+}
+
+// Intense anime eyes: almond whites, irises looking in, angry brows.
+function animeEyes(g, c, r, iris, { brows = true } = {}) {
+  for (const s of [-1, 1]) {
+    const ex = c.x + s * 0.17 * r, ey = c.y + 0.02 * r, rot = -s * 0.2;
+    g.beginPath(); g.ellipse(ex, ey, 0.11 * r, 0.068 * r, rot, 0, TAU);
+    g.fillStyle = '#FFFFFF'; g.fill();
+    g.beginPath(); g.arc(ex - s * 0.025 * r, ey + 0.005 * r, 0.05 * r, 0, TAU);
+    g.fillStyle = iris; g.fill();
+    g.beginPath(); g.arc(ex - s * 0.025 * r, ey + 0.005 * r, 0.022 * r, 0, TAU);
+    g.fillStyle = INK; g.fill();
+    g.beginPath(); g.arc(ex - s * 0.04 * r, ey - 0.015 * r, 0.014 * r, 0, TAU);
+    g.fillStyle = '#FFFFFF'; g.fill();
+    g.beginPath(); g.ellipse(ex, ey, 0.11 * r, 0.068 * r, rot, Math.PI * 1.02, Math.PI * 1.98);
+    g.lineWidth = 0.045 * r; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+    if (brows) {
+      g.beginPath();
+      g.moveTo(c.x + s * 0.06 * r, ey - 0.08 * r);
+      g.lineTo(c.x + s * 0.3 * r, ey - 0.16 * r);
+      g.lineWidth = 0.06 * r; g.stroke();
+    }
+  }
+}
+
+function nose(g, c, r) {
+  g.beginPath();
+  g.moveTo(c.x + 0.015 * r, c.y + 0.11 * r);
+  g.lineTo(c.x - 0.015 * r, c.y + 0.17 * r);
+  g.lineTo(c.x + 0.025 * r, c.y + 0.17 * r);
+  g.lineWidth = 0.025 * r; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+}
+
+function mouth(g, c, r, { color = INK, width = 0.035 } = {}) {
+  g.beginPath();
+  g.moveTo(c.x - 0.1 * r, c.y + 0.27 * r);
+  g.quadraticCurveTo(c.x, c.y + 0.29 * r, c.x + 0.11 * r, c.y + 0.24 * r);
+  g.lineWidth = width * r; g.lineCap = 'round'; g.strokeStyle = color; g.stroke();
+}
+
+function grin(g, c, r) {
+  g.beginPath();
+  g.moveTo(c.x - 0.15 * r, c.y + 0.22 * r);
+  g.quadraticCurveTo(c.x, c.y + 0.38 * r, c.x + 0.15 * r, c.y + 0.22 * r);
+  g.closePath();
+  inked(g, r, '#FFFFFF', 0.035);
+  for (const x of [-0.07, 0, 0.07]) {
+    g.beginPath(); g.moveTo(c.x + x * r, c.y + 0.22 * r); g.lineTo(c.x + x * r, c.y + 0.3 * r);
+    g.lineWidth = 0.02 * r; g.stroke();
+  }
+}
+
+/* Each style: back() draws behind the head, front() on top of it.
+   F = the fighter's current colors (skin / hair / eyes, after transformations). */
+const FACE_STYLES = {
+  goku: {
+    back(g, c, r, F) {
+      spikes(g, c, r, F.hair, [196, 220, 246, 270, 294, 320, 344], [0.8, 0.94, 1.0, 0.98, 1.0, 0.94, 0.8], 14);
+    },
+    front(g, c, r, F) {
+      cap(g, c, r, F.hair);
+      bangs(g, c, r, F.hair, [-0.22, -0.08, 0.07, 0.21], 0.2);
+      animeEyes(g, c, r, F.eyes); nose(g, c, r); mouth(g, c, r);
+    },
+  },
+  vegeta: {
+    back(g, c, r, F) {
+      spikes(g, c, r, F.hair, [226, 242, 258, 274, 290, 306, 318], [0.86, 0.98, 1.06, 1.08, 1.04, 0.96, 0.84], 9, 0.1);
+    },
+    front(g, c, r, F) {
+      g.beginPath();                                  // flame hair with a sharp widow's peak
+      g.moveTo(c.x - c.rx * 1.04, c.y - 0.08 * r);
+      g.ellipse(c.x, c.y - 0.08 * r, c.rx * 1.04, c.ry * 0.82, 0, Math.PI, TAU);
+      g.lineTo(c.x + 0.24 * r, c.y - 0.34 * r);
+      g.lineTo(c.x, c.y - 0.08 * r);
+      g.lineTo(c.x - 0.24 * r, c.y - 0.34 * r);
+      g.closePath();
+      inked(g, r, F.hair);
+      animeEyes(g, c, r, F.eyes); nose(g, c, r); mouth(g, c, r);
+    },
+  },
+  gohan: {
+    back(g, c, r, F) {
+      spikes(g, c, r, F.hair, [204, 236, 270, 304, 336], [0.86, 0.96, 1.0, 0.96, 0.86], 16);
+    },
+    front(g, c, r, F) {
+      cap(g, c, r, F.hair);
+      bangs(g, c, r, F.hair, [-0.2, 0.18], 0.16);
+      bangs(g, c, r, F.hair, [0.01], 0.32, 0.05);   // his signature single strand
+      animeEyes(g, c, r, F.eyes); nose(g, c, r); mouth(g, c, r);
+    },
+  },
+  trunks: {
+    back() {},
+    front(g, c, r, F) {
+      g.beginPath();                                  // straight bowl cut with side curtains
+      g.moveTo(c.x - c.rx * 1.06, c.y + 0.16 * r);
+      g.lineTo(c.x - c.rx * 1.06, c.y - 0.12 * r);
+      g.ellipse(c.x, c.y - 0.12 * r, c.rx * 1.06, c.ry * 0.82, 0, Math.PI, TAU);
+      g.lineTo(c.x + c.rx * 1.06, c.y + 0.16 * r);
+      g.lineTo(c.x + c.rx * 0.8, c.y + 0.16 * r);
+      g.lineTo(c.x + c.rx * 0.8, c.y - 0.14 * r);
+      g.lineTo(c.x - c.rx * 0.8, c.y - 0.14 * r);
+      g.lineTo(c.x - c.rx * 0.8, c.y + 0.16 * r);
+      g.closePath();
+      inked(g, r, F.hair);
+      bangs(g, c, r, F.hair, [-0.24, -0.12, 0, 0.12, 0.24], 0.12, 0.065);
+      animeEyes(g, c, r, F.eyes); nose(g, c, r); mouth(g, c, r);
+    },
+  },
+  broly: {
+    back(g, c, r, F) {
+      spikes(g, c, r, F.hair, [182, 204, 226, 248, 270, 292, 314, 336, 358], [0.9, 0.98, 1.02, 1.04, 1.06, 1.04, 1.02, 0.98, 0.9], 13);
+      spikes(g, c, r, F.hair, [148, 32], [1.0, 1.0], 13, 0);   // long hair hanging down the sides
+    },
+    front(g, c, r, F) {
+      cap(g, c, r, F.hair);
+      bangs(g, c, r, F.hair, [-0.2, -0.05, 0.1, 0.23], 0.15);
+      roundRect(g, c.x - 0.34 * r, c.y - 0.24 * r, 0.68 * r, 0.075 * r, 0.03 * r);   // gold circlet
+      inked(g, r, '#FFC93C', 0.03);
+      g.beginPath(); g.arc(c.x, c.y - 0.2 * r, 0.035 * r, 0, TAU); inked(g, r, '#E8282B', 0.02);
+      animeEyes(g, c, r, F.eyes); nose(g, c, r); mouth(g, c, r);
+    },
+  },
+  krillin: {
+    back() {},
+    front(g, c, r, F) {
+      for (const y of [-0.31, -0.23]) {             // six dots on the forehead
+        for (const x of [-0.09, 0, 0.09]) {
+          g.beginPath(); g.arc(c.x + x * r, c.y + y * r, 0.02 * r, 0, TAU); g.fillStyle = INK; g.fill();
+        }
+      }
+      g.beginPath(); g.arc(c.x - 0.12 * r, c.y - 0.3 * r, 0.12 * r, 200 * DEG, 260 * DEG);   // shiny head
+      g.lineWidth = 0.04 * r; g.strokeStyle = 'rgba(255,255,255,0.8)'; g.stroke();
+      animeEyes(g, c, r, F.eyes); mouth(g, c, r);
+    },
+    noEars: false,
+  },
+  piccolo: {
+    back(g, c, r, F) {
+      for (const s of [-1, 1]) {                       // pointed ears
+        g.beginPath();
+        g.moveTo(c.x + s * c.rx * 0.9, c.y - 0.06 * r);
+        g.lineTo(c.x + s * 0.66 * r, c.y - 0.22 * r);
+        g.lineTo(c.x + s * c.rx * 0.92, c.y + 0.14 * r);
+        g.closePath();
+        inked(g, r, F.skin);
+      }
+    },
+    front(g, c, r, F) {
+      g.beginPath();                                  // white turban
+      g.ellipse(c.x, c.y - 0.16 * r, c.rx * 1.1, c.ry * 0.86, 0, Math.PI, TAU);
+      g.closePath();
+      inked(g, r, '#F7F7F2');
+      roundRect(g, c.x - c.rx * 1.1, c.y - 0.24 * r, c.rx * 2.2, 0.09 * r, 0.03 * r);
+      inked(g, r, '#6A3FA0', 0.035);
+      for (const s of [-1, 1]) {                       // cheek ridges
+        g.beginPath(); g.moveTo(c.x + s * 0.22 * r, c.y + 0.1 * r); g.lineTo(c.x + s * 0.27 * r, c.y + 0.18 * r);
+        g.lineWidth = 0.025 * r; g.strokeStyle = INK; g.stroke();
+      }
+      animeEyes(g, c, r, F.eyes); nose(g, c, r); mouth(g, c, r);
+    },
+    noEars: true,
+  },
+  frieza: {
+    back() {},
+    front(g, c, r, F) {
+      g.beginPath();                                  // glossy purple dome
+      g.ellipse(c.x, c.y - 0.1 * r, c.rx * 1.02, c.ry * 0.84, 0, Math.PI, TAU);
+      g.closePath();
+      inked(g, r, '#8E44AD');
+      g.beginPath(); g.ellipse(c.x - 0.12 * r, c.y - 0.34 * r, 0.12 * r, 0.05 * r, -0.4, 0, TAU);
+      g.fillStyle = 'rgba(255,255,255,0.7)'; g.fill();
+      for (const s of [-1, 1]) {                       // purple cheek marks
+        g.beginPath(); g.moveTo(c.x + s * 0.27 * r, c.y + 0.08 * r); g.lineTo(c.x + s * 0.22 * r, c.y + 0.16 * r);
+        g.lineWidth = 0.04 * r; g.lineCap = 'round'; g.strokeStyle = '#8E44AD'; g.stroke();
+      }
+      animeEyes(g, c, r, '#E8282B'); mouth(g, c, r, { color: '#3B1F4A', width: 0.05 });
+    },
+    noEars: true,
+  },
+  cell: {
+    back(g, c, r) {
+      spike(g, c, 232, r * 0.98, 15, -12, 0.5); inked(g, r, '#1C1C1C');   // black crown crest
+      spike(g, c, 308, r * 0.98, 15, 12, 0.5); inked(g, r, '#1C1C1C');
+      spike(g, c, 270, r * 0.82, 10, 0, 0.5); inked(g, r, '#1C1C1C');
+    },
+    front(g, c, r, F) {
+      for (const [x, y, s] of [[-0.25, -0.3, 0.05], [0.05, -0.38, 0.04], [0.26, -0.24, 0.045], [-0.3, 0.2, 0.04], [0.3, 0.22, 0.04], [-0.1, -0.15, 0.03]]) {
+        g.beginPath(); g.arc(c.x + x * r, c.y + y * r, s * r, 0, TAU); g.fillStyle = '#2E6B1F'; g.fill();
+      }
+      for (const s of [-1, 1]) {                       // purple cheek stripes
+        g.beginPath(); g.moveTo(c.x + s * 0.2 * r, c.y + 0.08 * r); g.lineTo(c.x + s * 0.24 * r, c.y + 0.26 * r);
+        g.lineWidth = 0.05 * r; g.lineCap = 'round'; g.strokeStyle = '#7B3FA0'; g.stroke();
+      }
+      animeEyes(g, c, r, '#D81B60'); mouth(g, c, r);
+    },
+    noEars: true,
+  },
+  buu: {
+    back(g, c, r, F) {
+      g.beginPath();                                  // head tentacle
+      g.moveTo(c.x + 0.05 * r, c.y - c.ry * 0.85);
+      g.quadraticCurveTo(c.x + 0.1 * r, c.y - 0.85 * r, c.x - 0.38 * r, c.y - 0.82 * r);
+      g.lineCap = 'round';
+      g.lineWidth = 0.22 * r; g.strokeStyle = INK; g.stroke();
+      g.lineWidth = 0.15 * r; g.strokeStyle = F.skin; g.stroke();
+    },
+    front(g, c, r, F) {
+      for (const s of [-1, 1]) {                       // markings
+        g.beginPath(); g.moveTo(c.x + s * 0.3 * r, c.y - 0.3 * r); g.lineTo(c.x + s * 0.38 * r, c.y - 0.12 * r);
+        g.lineWidth = 0.05 * r; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+      }
+      animeEyes(g, c, r, '#E8282B'); grin(g, c, r);
+    },
+    noEars: true,
+  },
+  beerus: {
+    back(g, c, r, F) {
+      for (const a of [226, 314]) {                    // tall cat ears
+        spike(g, c, a, r * 1.0, 17, 0, 0.7); inked(g, r, F.skin);
+        spike(g, c, a, r * 0.84, 8, 0, 0.7); g.fillStyle = '#F2A7C3'; g.fill();
+      }
+    },
+    front(g, c, r, F) {
+      for (const s of [-1, 1]) {                       // gold earrings
+        g.beginPath(); g.arc(c.x + s * c.rx * 0.95, c.y + 0.2 * r, 0.06 * r, 0, TAU);
+        g.lineWidth = 0.035 * r; g.strokeStyle = '#FFC93C'; g.stroke();
+      }
+      animeEyes(g, c, r, '#FFD400'); mouth(g, c, r);
+    },
+    noEars: true,
+  },
+  jiren: {
+    back() {},
+    front(g, c, r) {
+      for (const s of [-1, 1]) {
+        g.beginPath();                                // head ridges
+        g.moveTo(c.x + s * 0.12 * r, c.y - c.ry * 0.95);
+        g.quadraticCurveTo(c.x + s * 0.14 * r, c.y - 0.3 * r, c.x + s * 0.08 * r, c.y - 0.18 * r);
+        g.lineWidth = 0.03 * r; g.strokeStyle = INK; g.stroke();
+        g.beginPath();                                // huge black eyes, no whites
+        g.ellipse(c.x + s * 0.16 * r, c.y + 0.03 * r, 0.12 * r, 0.065 * r, -s * 0.32, 0, TAU);
+        g.fillStyle = INK; g.fill();
+        g.beginPath(); g.arc(c.x + s * 0.13 * r, c.y + 0.01 * r, 0.018 * r, 0, TAU);
+        g.fillStyle = '#FFFFFF'; g.fill();
+        g.beginPath(); g.moveTo(c.x + s * 0.05 * r, c.y - 0.07 * r); g.lineTo(c.x + s * 0.3 * r, c.y - 0.1 * r);
+        g.lineWidth = 0.05 * r; g.stroke();
+      }
+      g.beginPath(); g.moveTo(c.x - 0.07 * r, c.y + 0.27 * r); g.lineTo(c.x + 0.07 * r, c.y + 0.27 * r);
+      g.lineWidth = 0.035 * r; g.strokeStyle = INK; g.stroke();
+    },
+    noEars: true,
+    bigHead: true,
+  },
+};
+
+// Current colors for a fighter (base look + transformation).
+function looks(f) {
+  const form = f.form || {};
+  return {
+    skin: form.skin || f.def.skin,
+    hair: form.hair || f.def.hair || INK,
+    eyes: form.eyes || INK,
+  };
+}
+
+function drawFace(g, f, r) {
+  const style = FACE_STYLES[f.def.style];
+  const F = looks(f);
+  const big = style.bigHead ? 1.08 : 1;
+  const c = { x: 0, y: 0.14 * r, rx: 0.42 * r * big, ry: 0.48 * r * big };
+  g.save();
+  g.beginPath(); g.arc(0, 0, r * 0.9, 0, TAU); g.clip();
+  g.lineJoin = 'round';
+  style.back(g, c, r, F);
+  if (!style.noEars) ears(g, c, r, F.skin);
+  head(g, c, r, F.skin);
+  style.front(g, c, r, F);
+  g.restore();
+}
+
+/* =====================================================================
+   RENDERING
+   ===================================================================== */
+
+// Tokens (colored disc + halftone + face + ink rim) are pre-rendered per
+// fighter, form and size. Faces are expensive; this keeps 60fps.
+const sprites = new Map();
+
+function getSprite(f, r) {
+  const key = `${f.id}|${f.formIdx}|${r}`;
+  let s = sprites.get(key);
+  if (s) return s;
+
+  const size = (r + 6) * 2;
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  g.scale(c.width / size, c.height / size);
+  g.translate(size / 2, size / 2);
+
+  // Disc in the fighter's color with a comic halftone shade
+  g.beginPath(); g.arc(0, 0, r, 0, TAU);
+  const grad = g.createRadialGradient(-r * 0.35, -r * 0.4, r * 0.1, 0, 0, r);
+  grad.addColorStop(0, '#FFFFFF');
+  grad.addColorStop(1, f.def.color);
+  g.fillStyle = grad;
+  g.fill();
+  g.save();
+  g.clip();
+  g.fillStyle = 'rgba(20,20,20,0.16)';
+  const step = Math.max(3, r * 0.16);
+  for (let y = -r; y < r; y += step) {
+    for (let x = -r + ((y / step) % 2 ? step / 2 : 0); x < r; x += step) {
+      const k = clamp((x + y) / (2 * r) + 0.5, 0, 1);   // dots grow toward the lower right
+      g.beginPath(); g.arc(x, y, step * 0.28 * k, 0, TAU); g.fill();
+    }
+  }
+  g.restore();
+
+  drawFace(g, f, r);
+
+  // Ink rim
+  g.beginPath(); g.arc(0, 0, r - 1, 0, TAU);
+  g.lineWidth = Math.max(2.5, r * 0.1);
+  g.strokeStyle = INK;
+  g.stroke();
+
+  s = { canvas: c, size };
+  sprites.set(key, s);
+  return s;
+}
+
+// Paper background with halftone dots (rebuilt on resize).
+let paper = null;
+function buildPaper() {
+  paper = document.createElement('canvas');
+  paper.width = canvas.width;
+  paper.height = canvas.height;
+  const g = paper.getContext('2d');
+  g.scale(scale, scale);
+  g.fillStyle = PAPER;
+  g.fillRect(0, 0, LW, LH);
+  g.fillStyle = 'rgba(140,70,0,0.10)';
+  for (let y = 0, row = 0; y < LH; y += 9, row++) {
+    for (let x = row % 2 ? 4.5 : 0; x < LW; x += 9) {
+      const dx = (x - LW / 2) / (LW / 2), dy = (y - LH / 2) / (LH / 2);
+      const d = Math.min(1, Math.hypot(dx, dy * 0.9));
+      g.beginPath(); g.arc(x, y, 0.4 + 2.2 * d * d, 0, TAU); g.fill();
+    }
+  }
+}
+
+// Manga speed lines radiating from the stage, slowly turning.
+function drawSpeedLines() {
+  ctx.save();
+  ctx.translate(L.acx, L.acy);
+  ctx.rotate(S.time * 0.05);
+  ctx.fillStyle = 'rgba(20,20,20,0.05)';
+  for (let i = 0; i < 48; i++) {
+    const a = i / 48 * TAU, w = (i % 3 + 1) * 0.006;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * 200, Math.sin(a) * 200);
+    ctx.lineTo(Math.cos(a - w) * 900, Math.sin(a - w) * 900);
+    ctx.lineTo(Math.cos(a + w) * 900, Math.sin(a + w) * 900);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// Top-down tournament stage: stone tiles, thick ink border.
+function drawArena() {
+  const w = L.ax1 - L.ax0, h = L.ay1 - L.ay0;
+  ctx.save();
+  ctx.fillStyle = INK;
+  ctx.fillRect(L.ax0 + 7, L.ay0 + 7, w, h);                // offset comic shadow
+  ctx.fillStyle = '#EAE3D2';
+  ctx.fillRect(L.ax0, L.ay0, w, h);
+  ctx.strokeStyle = 'rgba(20,20,20,0.18)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 1; i < 10; i++) {
+    const x = L.ax0 + w * i / 10, y = L.ay0 + h * i / 10;
+    ctx.moveTo(x, L.ay0); ctx.lineTo(x, L.ay1);
+    ctx.moveTo(L.ax0, y); ctx.lineTo(L.ax1, y);
+  }
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(20,20,20,0.35)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(L.ax0 + 10, L.ay0 + 10, w - 20, h - 20);
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 6;
+  ctx.strokeRect(L.ax0, L.ay0, w, h);
+  ctx.restore();
+}
+
+function drawDragonBall(b) {
+  const age = S.time - b.born;
+  const r = 12 * (age < 0.3 ? easeOutBack(age / 0.3) : 1 + 0.06 * Math.sin(S.time * 5));
+  ctx.save();
+  ctx.translate(b.x, b.y);
+  const glow = ctx.createRadialGradient(0, 0, r * 0.5, 0, 0, r * 2.4);
+  glow.addColorStop(0, 'rgba(255,170,0,0.45)');
+  glow.addColorStop(1, 'rgba(255,170,0,0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath(); ctx.arc(0, 0, r * 2.4, 0, TAU); ctx.fill();
+
+  const body = ctx.createRadialGradient(-r * 0.3, -r * 0.35, r * 0.1, 0, 0, r);
+  body.addColorStop(0, '#FFF0A8');
+  body.addColorStop(0.55, '#FFA51F');
+  body.addColorStop(1, '#E06A00');
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU);
+  ctx.fillStyle = body; ctx.fill();
+  ctx.lineWidth = 2.2; ctx.strokeStyle = INK; ctx.stroke();
+
+  const n = b.stars, sr = n <= 2 ? 0.26 * r : n <= 4 ? 0.21 * r : 0.17 * r;
+  for (let i = 0; i < n; i++) {
+    const a = i / n * TAU - Math.PI / 2, d = n === 1 ? 0 : 0.42 * r;
+    star(Math.cos(a) * d, Math.sin(a) * d, sr);
+  }
+  ctx.beginPath(); ctx.ellipse(-r * 0.35, -r * 0.45, r * 0.25, r * 0.12, -0.6, 0, TAU);
+  ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.fill();
+  ctx.restore();
+}
+
+function star(x, y, R) {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = i / 10 * TAU - Math.PI / 2, rr = i % 2 ? R * 0.45 : R;
+    ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+  }
+  ctx.closePath();
+  ctx.fillStyle = '#E8282B'; ctx.fill();
+}
+
+// Flickering flame aura (comic style: flat color, ink outline, taller on top).
+function drawAura(f, color) {
+  const n = 14;
+  ctx.beginPath();
+  for (let i = 0; i <= n * 2; i++) {
+    const a = i / (n * 2) * TAU;
+    const out = i % 2 === 0;
+    const flick = Math.sin(S.time * 16 + i * 1.9 + f.id) * 0.1;
+    const up = Math.max(0, -Math.sin(a)) * 0.45;
+    const rr = out ? f.r * (1.38 + up + flick) : f.r * 1.12;
+    ctx.lineTo(f.x + Math.cos(a) * rr, f.y + Math.sin(a) * rr);
+  }
+  ctx.closePath();
+  ctx.fillStyle = rgba(color, 0.8);
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = INK;
+  ctx.stroke();
+}
+
+function hpColor(frac) {
+  return frac > 0.5 ? '#2ECC40' : frac > 0.25 ? '#FFC400' : '#E8282B';
+}
+
+function drawFighter(f) {
+  if (f.aura) drawAura(f, f.aura);
+  const sp = getSprite(f, Math.round(f.r));
+  const k = f.pop < 1 ? 0.7 + 0.3 * easeOutBack(f.pop) : 1;
+  const size = sp.size * k * (f.r / Math.round(f.r));
+  ctx.drawImage(sp.canvas, f.x - size / 2, f.y - size / 2, size, size);
+
+  if (f.flash > 0) {                                  // white hit flash
+    ctx.beginPath(); ctx.arc(f.x, f.y, f.r * k, 0, TAU);
+    ctx.fillStyle = `rgba(255,255,255,${Math.min(0.8, f.flash * 9)})`;
+    ctx.fill();
+  }
+
+  // HP ring
+  const frac = clamp(f.hp / f.maxHp, 0, 1);
+  ctx.lineCap = 'butt';
+  ctx.beginPath(); ctx.arc(f.x, f.y, f.r + 5, 0, TAU);
+  ctx.lineWidth = 6; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.beginPath(); ctx.arc(f.x, f.y, f.r + 5, -Math.PI / 2, -Math.PI / 2 + frac * TAU);
+  ctx.lineWidth = 3.5; ctx.strokeStyle = hpColor(frac); ctx.stroke();
+
+  // Name + power level
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `400 13px ${COMIC}`;
+  inkText(ctx, f.def.name.toUpperCase(), f.x, f.y + f.r + 17, '#FFFFFF', 4);
+  ctx.font = `400 11px ${COMIC}`;
+  inkText(ctx, fmt(powerLevel(f)), f.x, f.y + f.r + 31, '#FFE14D', 3.5);
+}
+
+// Little gold crown over the winner once the round is over.
+function drawCrown(f) {
+  const y = f.y - f.r - 26, w = 34, h = 20;
+  ctx.save();
+  ctx.translate(f.x, y + Math.sin(S.time * 3) * 2);
+  ctx.beginPath();
+  ctx.moveTo(-w / 2, h / 2);
+  ctx.lineTo(-w / 2, -h / 4);
+  ctx.lineTo(-w / 4, h / 8);
+  ctx.lineTo(0, -h / 2);
+  ctx.lineTo(w / 4, h / 8);
+  ctx.lineTo(w / 2, -h / 4);
+  ctx.lineTo(w / 2, h / 2);
+  ctx.closePath();
+  ctx.fillStyle = '#FFD400'; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.restore();
+}
+
+function drawFx() {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const f of S.fx) {
+    const t = 1 - f.life / f.max;      // 0 → 1 over the effect's life
+
+    if (f.kind === 'ring') {
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = f.color;
+      ctx.lineWidth = f.width * (1 - t) + 1;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r0 + (f.r1 - f.r0) * easeOut(t), 0, TAU);
+      ctx.stroke();
+    } else if (f.kind === 'spark') {
+      ctx.globalAlpha = 1 - t;
+      ctx.fillStyle = f.color;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.size, 0, TAU); ctx.fill();
+    }
+  }
+
+  // Comic starbursts, then floating labels on top
+  for (const f of S.fx) {
+    if (f.kind !== 'burst') continue;
+    const t = 1 - f.life / f.max;
+    const pop = t < 0.18 ? 0.4 + 0.6 * easeOutBack(t / 0.18) : 1;
+    ctx.globalAlpha = t < 0.7 ? 1 : (1 - t) / 0.3;
+    ctx.save();
+    ctx.translate(f.x, f.y);
+    ctx.rotate(f.rot);
+    ctx.scale(pop * f.size, pop * f.size);
+    ctx.beginPath();
+    for (let i = 0; i < 24; i++) {
+      const a = i / 24 * TAU, rr = i % 2 ? 22 : 38 + (i % 4 === 0 ? 6 : 0);
+      ctx.lineTo(Math.cos(a) * rr * 1.25, Math.sin(a) * rr);
+    }
+    ctx.closePath();
+    ctx.fillStyle = '#FFE14D'; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = INK; ctx.stroke();
+    fitFont(ctx, f.word, 66, 22, 400, COMIC);
+    inkText(ctx, f.word, 0, 1, '#E8282B', 4);
+    ctx.restore();
+  }
+
+  for (const f of S.fx) {
+    if (f.kind !== 'float') continue;
+    const t = 1 - f.life / f.max;
+    const pop = t < 0.12 ? 0.5 + 0.5 * easeOutBack(t / 0.12) : 1;
+    ctx.globalAlpha = t < 0.75 ? 1 : (1 - t) / 0.25;
+    const y = f.y - 40 * easeOut(t);
+    const x = clamp(f.x, 90, LW - 90);
+    fitFont(ctx, f.text, 300, f.size * pop, 400, COMIC);
+    inkText(ctx, f.text, x, y, f.color, f.size > 16 ? 6 : 4);
+    if (f.sub) {
+      fitFont(ctx, f.sub, 300, 14 * pop, 400, COMIC);
+      inkText(ctx, f.sub, x, y + f.size * 0.85, '#FFFFFF', 4);
+    }
+  }
+  ctx.restore();
+}
+
+// Counter, top-left.
+function drawStats() {
+  const leader = alive().sort((a, b) => b.power - a.power)[0];
+  const rows = [
+    ['FIGHTERS LEFT', String(alive().length)],
+    ['K.O.s', String(S.kos)],
+    ['DRAGON BALLS', `${S.ballsTaken}/7`],
+    ['STRONGEST', leader ? leader.def.name.toUpperCase() : '—'],
+  ];
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = `400 14px ${COMIC}`;
+  let y = L.statsY;
+  for (const [label, val] of rows) {
+    ctx.fillStyle = INK;
+    ctx.fillText(label, 14, y);
+    const x = 14 + ctx.measureText(label + ' ').width;
+    ctx.fillStyle = '#E8282B';
+    ctx.fillText(val, x, y);
+    y += 16;
+  }
+  ctx.restore();
+}
+
+// Round countdown in a comic box, top-center.
+function drawTimer() {
+  const secs = Math.max(0, Math.ceil(S.clock));
+  const text = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  const urgent = !S.timeUp && S.clock <= 10;
+  const pulse = urgent ? 1 + 0.12 * Math.pow(S.clock - Math.floor(S.clock), 3) : 1;
+  ctx.save();
+  ctx.translate(L.cx, L.timerY);
+  ctx.scale(pulse, pulse);
+  ctx.fillStyle = INK;
+  roundRect(ctx, -54, -22, 116, 50, 6); ctx.fill();          // offset shadow
+  ctx.fillStyle = urgent || S.timeUp ? '#FF3B30' : '#FFFDF5';
+  roundRect(ctx, -58, -26, 116, 50, 6); ctx.fill();
+  ctx.lineWidth = 3.5; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `400 36px ${COMIC}`;
+  ctx.fillStyle = urgent || S.timeUp ? '#FFFFFF' : INK;
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
+// The hook, styled like the Dragon Ball logo (orange-yellow, red + ink outline).
+function drawTitle() {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  fitFont(ctx, HOOK[0], 480, 26, 400, COMIC);
+  ctx.fillStyle = INK;
+  ctx.fillText(HOOK[0], L.cx, L.title1);
+
+  [L.title2, L.title3].forEach((y, i) => {
+    const text = HOOK[i + 1];
+    fitFont(ctx, text, 490, i ? 58 : 48, 400, COMIC);
+    const g = ctx.createLinearGradient(0, y - 24, 0, y + 24);
+    g.addColorStop(0, '#FFF27A');
+    g.addColorStop(0.5, '#FFC21A');
+    g.addColorStop(1, '#FF7A00');
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 12; ctx.strokeStyle = INK; ctx.strokeText(text, L.cx, y);
+    ctx.lineWidth = 6; ctx.strokeStyle = '#C62828'; ctx.strokeText(text, L.cx, y);
+    ctx.fillStyle = g; ctx.fillText(text, L.cx, y);
+  });
+  ctx.restore();
+}
+
+// All 12 fighters under the stage: K.O.'d ones greyed out with a red X.
+function drawRoster() {
+  const per = 12, gap = 41, mr = 14;
+  const x0 = L.cx - (per - 1) * gap / 2;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  S.fighters.forEach((f, i) => {
+    const x = x0 + (i % per) * gap, y = L.rosterY + Math.floor(i / per) * 58;
+    const sp = getSprite(f, mr), size = sp.size;
+    ctx.globalAlpha = f.alive ? 1 : 0.3;
+    ctx.drawImage(sp.canvas, x - size / 2, y - size / 2, size, size);
+    ctx.globalAlpha = 1;
+    if (!f.alive) {
+      ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.strokeStyle = '#E8282B';
+      ctx.beginPath();
+      ctx.moveTo(x - 11, y - 11); ctx.lineTo(x + 11, y + 11);
+      ctx.moveTo(x + 11, y - 11); ctx.lineTo(x - 11, y + 11);
+      ctx.stroke();
+    }
+    const frac = clamp(f.hp / f.maxHp, 0, 1);         // HP bar
+    ctx.fillStyle = INK; ctx.fillRect(x - 17, y + mr + 4, 34, 7);
+    ctx.fillStyle = hpColor(frac); ctx.fillRect(x - 15, y + mr + 6, 30 * frac, 3);
+  });
+  ctx.restore();
+}
+
+function drawBanner() {
+  const B = S.banner;
+  if (!B) return;
+  const t = 1 - B.life / B.max;
+  const fadeOut = Math.min(1, B.life / 0.4);
+  const pop = t < 0.12 ? 0.3 + 0.7 * easeOutBack(t / 0.12) : 1;
+
+  ctx.save();
+  ctx.globalAlpha = fadeOut;
+  ctx.translate(L.cx, L.acy - 10);
+  ctx.rotate(-0.05);
+  ctx.scale(pop, pop);
+  ctx.fillStyle = INK;
+  roundRect(ctx, -222, -54, 460, 124, 8); ctx.fill();          // offset shadow
+  ctx.fillStyle = '#FFFDF5';
+  roundRect(ctx, -230, -62, 460, 124, 8); ctx.fill();
+  ctx.lineWidth = 6; ctx.strokeStyle = INK; ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  fitFont(ctx, B.text, 420, 64, 400, COMIC);
+  const g = ctx.createLinearGradient(0, -40, 0, 20);
+  g.addColorStop(0, '#FFF27A');
+  g.addColorStop(1, '#FF7A00');
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 12; ctx.strokeStyle = INK; ctx.strokeText(B.text, 0, -14);
+  ctx.lineWidth = 6; ctx.strokeStyle = '#C62828'; ctx.strokeText(B.text, 0, -14);
+  ctx.fillStyle = g; ctx.fillText(B.text, 0, -14);
+  if (B.sub) {
+    fitFont(ctx, B.sub, 420, 24, 400, COMIC);
+    ctx.fillStyle = INK;
+    ctx.fillText(B.sub, 0, 36);
+  }
+  ctx.restore();
+}
+
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(paper, 0, 0);
+  const sx = S.shake ? rand(-1, 1) * S.shake : 0, sy = S.shake ? rand(-1, 1) * S.shake : 0;
+  ctx.setTransform(scale, 0, 0, scale, sx * scale, sy * scale);
+
+  drawSpeedLines();
+  drawStats();
+  drawTimer();
+  drawTitle();
+  drawArena();
+  for (const b of S.balls) drawDragonBall(b);
+  for (const f of S.fighters) if (f.alive) drawFighter(f);
+  if (S.timeUp && S.winner) drawCrown(S.winner);
+  drawFx();
+  drawRoster();
+
+  if (S.flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${S.flash})`;
+    ctx.fillRect(-20, -20, LW + 40, LH + 40);
+  }
+  drawBanner();
+
+  // Black bands (drawn last, unshaken, so nothing spills into TikTok's UI zones)
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, LW, L.panelTop);
+  ctx.fillRect(0, L.panelBottom, LW, LH - L.panelBottom);
+}
+
+/* =====================================================================
+   VIDEO RECORDING
+   Records one full round straight from the canvas (1080×1920, 60fps, with
+   sound), keeps going a few seconds into the freeze, then saves the file.
+   ===================================================================== */
+
+const params = new URLSearchParams(location.search);
+// ?upload=/path  → POST the finished video to this same-origin path instead of
+// downloading it (used by render.py). ?autorecord → start on load.
+const UPLOAD_PATH = /^\/(?!\/)/.test(params.get('upload') || '') ? params.get('upload') : null;
+
+const Recorder = {
+  on: false, rec: null, chunks: [], tail: 0, startedAt: 0, frames: 0,
+  TAIL_SECONDS: 3.5,        // how long to keep filming the frozen end screen
+
+  // Best format this browser can record: MP4 (H.264/AAC) first, WebM fallback.
+  pickMime() {
+    const types = [
+      'video/mp4;codecs=avc1.64002A,mp4a.40.2',
+      'video/mp4;codecs=avc1,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+    return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  },
+
+  start() {
+    if (this.on) return;
+    if (!window.MediaRecorder || !canvas.captureStream) {
+      alert("This browser can't record video. Try Chrome or Safari on a computer.");
+      return;
+    }
+    Sound.unlock();
+    this.on = true;
+    resize();                 // lock the canvas to 1080×1920
+    startRound();
+    draw();
+
+    const stream = canvas.captureStream(60);
+    const audio = Sound.recordStream();
+    if (audio) audio.getAudioTracks().forEach(t => stream.addTrack(t));
+
+    const mimeType = this.pickMime();
+    const opts = { videoBitsPerSecond: 8_000_000, audioBitsPerSecond: 192_000 };
+    if (mimeType) opts.mimeType = mimeType;
+    this.rec = new MediaRecorder(stream, opts);
+    this.chunks = [];
+    this.rec.ondataavailable = e => { if (e.data.size) this.chunks.push(e.data); };
+    this.rec.onstop = () => this.save();
+    this.rec.start(1000);
+
+    this.tail = this.TAIL_SECONDS;
+    this.startedAt = performance.now();
+    this.frames = 0;
+    $('recBtn').classList.add('on');
+    $('recBtn').textContent = '⏹';
+    $('recBadge').hidden = false;
+  },
+
+  // Called every frame once the round is over: film the freeze, then stop.
+  tick(rdt) {
+    if (!this.rec) return;
+    this.tail -= rdt;
+    if (this.tail <= 0) this.stop();
+  },
+
+  stop() {
+    if (this.rec && this.rec.state !== 'inactive') this.rec.stop();
+  },
+
+  save() {
+    const type = this.rec.mimeType || 'video/webm';
+    const blob = new Blob(this.chunks, { type });
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const name = `dragon-ball-${stamp}.${ext}`;
+    const secs = (performance.now() - this.startedAt) / 1000;
+    const fps = (this.frames / secs).toFixed(1);
+
+    this.rec = null;
+    this.chunks = [];
+    this.on = false;
+    resize();                 // back to the normal screen layout
+    $('recBtn').classList.remove('on');
+    $('recBtn').textContent = '⏺';
+    $('recBadge').hidden = true;
+
+    if (UPLOAD_PATH) {
+      fetch(`${UPLOAD_PATH}?name=${encodeURIComponent(name)}&fps=${fps}`, { method: 'POST', body: blob });
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  },
+
+  // On-screen REC badge with elapsed time.
+  frame() {
+    if (!this.on) return;
+    this.frames++;
+    const s = Math.floor((performance.now() - this.startedAt) / 1000);
+    const text = `● REC ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    const badge = $('recBadge');
+    if (badge.textContent !== text) badge.textContent = text;
+  },
+};
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+
+$('recBtn').addEventListener('click', () => (Recorder.on ? Recorder.stop() : Recorder.start()));
+
+// Tap the stage to drop a Dragon Ball there
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width * LW;
+  const y = (e.clientY - rect.top) / rect.height * LH;
+  if (!S.timeUp && x > L.ax0 + 20 && x < L.ax1 - 20 && y > L.ay0 + 20 && y < L.ay1 - 20) spawnBall(x, y);
+});
+
+// Audio starts on load if the browser allows it. If it's blocked, any touch,
+// click or key press starts it (different browsers count different events).
+for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) {
+  window.addEventListener(ev, () => Sound.unlock(), { capture: true });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Sound.unlock(); });
+
+const muteBtn = $('muteBtn');
+function toggleMute() {
+  Sound.setMuted(!Sound.muted);
+  muteBtn.textContent = Sound.muted ? '🔇' : '🔊';
+}
+muteBtn.addEventListener('click', toggleMute);
+
+const panel = $('panel');
+$('setBtn').addEventListener('click', () => { panel.hidden = !panel.hidden; });
+$('closeBtn').addEventListener('click', () => { panel.hidden = true; });
+$('resetBtn').addEventListener('click', () => { startRound(); panel.hidden = true; });
+
+// Bind a slider to a Settings key with a formatted readout
+function bindSlider(inputId, labelId, key, fmtVal) {
+  const input = $(inputId), label = $(labelId);
+  input.value = Settings[key];
+  label.textContent = fmtVal(Settings[key]);
+  input.addEventListener('input', () => {
+    Settings[key] = parseFloat(input.value);
+    label.textContent = fmtVal(Settings[key]);
+  });
+}
+bindSlider('inSpeed', 'vSpeed', 'speed', v => String(Math.round(v)));
+bindSlider('inDamage', 'vDamage', 'damage', v => v.toFixed(2) + '×');
+bindSlider('inBall', 'vBall', 'ballEvery', v => Math.round(v) + 's');
+
+// Keyboard shortcuts for desktop recording: M = mute, R = restart the round
+window.addEventListener('keydown', e => {
+  if (e.key === 'm' || e.key === 'M') toggleMute();
+  if (e.key === 'r' || e.key === 'R') startRound();
+});
+
+window.addEventListener('resize', resize);
+
+/* =====================================================================
+   MAIN LOOP
+   ===================================================================== */
+
+resize();
+startRound();
+Sound.unlock();     // try to start sound right away
+if (params.has('autorecord')) Recorder.start();
+
+let lastT = performance.now();
+function frame(now) {
+  const rdt = Math.min((now - lastT) / 1000, 1 / 20);   // clamp after tab switches
+  lastT = now;
+  update(rdt);
+  draw();
+  Recorder.frame();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

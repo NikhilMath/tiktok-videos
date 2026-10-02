@@ -4,7 +4,7 @@
 
 - Follow "Rules for every video" and "How to make a new video" in README.md exactly:
   - 2:00 round, freeze at 0:00
-  - black bands at the top (TOP_SPACE 110) and bottom (BOTTOM_SPACE 190)
+  - black bands at the top (TOP_SPACE 110) and bottom (BOTTOM_SPACE 142, about 25% shorter than the 190 used in 04–05); new videos only, never retrofit 01–03
   - a question hook that says "Comment below 👇"
   - something new every ~10s and an unpredictable outcome
   - 1080×1920, auto sound, everything drawn on the canvas, characters drawn in code

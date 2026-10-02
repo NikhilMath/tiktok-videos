@@ -43,7 +43,10 @@ tiktok-videos/
 
 1. **2 minutes long.** One round with a **2:00 countdown** on screen.
 2. **Freeze at the end.** At 0:00 everything stops and stays frozen on the final state. A banner shows the answer, and the recording holds the frozen frame for about 3.5 seconds.
-3. **Black space at the top and bottom.** Keep **solid black bands**, 220px on top and 380px on the bottom of the 1920px video, so TikTok's own UI never covers the action. That UI is the "Following | For You" bar at the top and the caption and username at the bottom. In code: `TOP_SPACE = 110` and `BOTTOM_SPACE = 190` (logical units; the video is 2× that).
+3. **Black bands at the top and bottom (new videos).** Every new video has **solid black bands** so TikTok's own UI never covers the action: the "Following | For You" bar at the top, and the caption and username at the bottom.
+   - **Top:** 220px of the 1920px video (`TOP_SPACE = 110` logical units; the video is 2× that).
+   - **Bottom:** about 285px (`BOTTOM_SPACE = 142`). Videos 04 and 05 used 380px (`190`), but the user said the bottom band can be about 25% shorter, so new videos use the smaller one.
+   - **Old videos stay as they are.** 01–03 were made before this rule; don't go back and add bands to them.
 4. **Hook at the top for retention.** A big question that tells people to comment, visible from the very first frame. Example: *"Comment below 👇 How many CLONES at the end?"* The video then answers it at 0:00.
 5. **Something new every ~10 seconds.** New enemies, power-ups, transformations or K.O.s. Viewers scroll away from slow stretches, and the user called a slow version "very boring".
 6. **The outcome must be hard to guess.** Tune it so different runs end differently; the comments are people guessing.
@@ -161,7 +164,7 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 - **Text:** "EVOLVED!" and "FINAL FORM!" only appear the first time each Pokémon is reached.
 - **Records:** "NEW RECORD!" gives slow motion and a rainbow banner.
 - **Settings:** gravity 1750, bounciness 0.80.
-- **Predates the band rules:** made before the top/bottom black bands existed.
+- **Predates the band rules:** made before the top/bottom black bands existed (left as is, on purpose).
 
 ### 02 · Hunter x Hunter: power ladder
 - **Engine:** same as 01.
@@ -183,7 +186,7 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
   - "IT'S OVER 9000!" fires the first time someone passes it.
 - **Ending:** last fighter standing, or a decision by HP at 0:00. The winner gets a crown.
 - **Tuning:** `BASE_DAMAGE = 0.95` makes the last K.O. land between about 1:15 and 2:00.
-- **Layout:** the first video with **black bands top and bottom**.
+- **Layout:** the first video with **black bands top and bottom** (380px bottom band; new videos use ~285px).
 
 ### 05 · Naruto: Shadow Clone Chaos (deliberately weird)
 - **Look:** an *Infinite Tsukuyomi* red-moon world: crimson sky, drifting ash, kanji columns. The arena is a giant red moon with turning Rinne-Sharingan rings, and the screen does an inverted-color glitch flash at big moments. Characters are **floating heads**.

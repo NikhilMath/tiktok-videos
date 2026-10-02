@@ -1,2 +1,5 @@
 # Rendered videos (large files, not committed)
 renders/
+
+# macOS Finder metadata
+.DS_Store

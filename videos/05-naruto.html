@@ -127,12 +127,13 @@ const TUNING = {
   cloneCap: 220,       // hard limit (keeps 60fps)
   splitMin: 1.4,       // seconds between splits for each clone…
   splitMax: 2.8,
-  crowding: 25,        // …slowed down by (1 + clones / crowding)
+  crowding: 50,        // …slowed down by (1 + clones / crowding)
   swirl: 230,          // vortex strength at the rim
   pull: 55,            // pull toward the middle
   maxSpeed: 360,
   frenzySeconds: 4,    // Sage Mode clone frenzy after a villain falls
   villainHp: 1.0,      // multiplies every villain's hp
+  hpPerClone: 0.5,     // villains arriving into a big swarm get extra hp (so every wave bites)
   moveEvery: 7,        // seconds between a villain's jutsu
 };
 
@@ -157,16 +158,16 @@ const VILLAIN_TYPES = {
 // A new attack every ~10-12 seconds so something is always happening.
 // Each enemy is [type, hp]; later waves send two at once.
 const WAVES = [
-  { at: 3,   enemies: [['gaara', 18]] },
-  { at: 13,  enemies: [['orochimaru', 28]] },
-  { at: 23,  enemies: [['kisame', 36]] },
-  { at: 33,  enemies: [['itachi', 45]] },
-  { at: 44,  enemies: [['deidara', 30], ['obito', 30]] },
-  { at: 56,  enemies: [['pain', 60]] },
-  { at: 68,  enemies: [['madara', 75]] },
-  { at: 80,  enemies: [['kisame', 40], ['itachi', 50]] },
-  { at: 92,  enemies: [['pain', 50], ['obito', 40]] },
-  { at: 104, enemies: [['kaguya', 120]] },
+  { at: 3,   enemies: [['gaara', 15]] },
+  { at: 13,  enemies: [['orochimaru', 22]] },
+  { at: 23,  enemies: [['kisame', 28]] },
+  { at: 33,  enemies: [['itachi', 34]] },
+  { at: 44,  enemies: [['deidara', 22], ['obito', 22]] },
+  { at: 56,  enemies: [['pain', 40]] },
+  { at: 68,  enemies: [['madara', 48]] },
+  { at: 80,  enemies: [['kisame', 28], ['itachi', 32]] },
+  { at: 92,  enemies: [['pain', 32], ['obito', 28]] },
+  { at: 102, enemies: [['kaguya', 60]] },
 ];
 const TOTAL_VILLAINS = WAVES.reduce((n, w) => n + w.enemies.length, 0);
 
@@ -594,7 +595,7 @@ function popClone(c, low) {
 function spawnVillain(style, baseHp) {
   const def = VILLAIN_TYPES[style];
   const a = rand(0, TAU);
-  const hp = Math.round(baseHp * TUNING.villainHp);
+  const hp = Math.round((baseHp + TUNING.hpPerClone * S.clones.length) * TUNING.villainHp);
   const v = {
     ...def, style, hp, maxHp: hp,
     x: L.acx + Math.cos(a) * (L.R - def.r - 10), y: L.acy + Math.sin(a) * (L.R - def.r - 10),
@@ -636,12 +637,15 @@ function useJutsu(v) {
 function defeatVillain(v) {
   v.alive = false;
   S.defeated++;
-  S.frenzy = TUNING.frenzySeconds;
+  const allClear = S.nextWave >= WAVES.length && !S.villains.some(o => o.alive);
+  S.frenzy = allClear ? 999 : TUNING.frenzySeconds;     // last villain down → frenzy to the end
   for (let i = 0; i < 4; i++) addRing(v.x, v.y, v.r * 0.5, v.r * (2.5 + i), i % 2 ? '#7FD8FF' : '#FFFFFF', 0.6 + i * 0.15, 8);
   addSpiral(v.x, v.y, v.r * 2.2);
   addSparks(v.x, v.y, 40, ['#7FD8FF', '#FFFFFF', ORANGE], 520);
   addFloat(v.x, v.y - v.r - 30, 'RASENGAN!', '#7FD8FF', 30, 1.6);
-  S.banner = { text: 'DEFEATED!', sub: `${v.name} is down · Sage Mode clone frenzy!`, life: 2.2, max: 2.2, color: ORANGE };
+  S.banner = allClear
+    ? { text: 'ALL VILLAINS DOWN!', sub: 'Sage Mode clone explosion until the end!', life: 2.6, max: 2.6, color: ORANGE }
+    : { text: 'DEFEATED!', sub: `${v.name} is down · Sage Mode clone frenzy!`, life: 2.2, max: 2.2, color: ORANGE };
   S.invert = 0.12;
   S.flash = 0.35;
   S.shake = 14;

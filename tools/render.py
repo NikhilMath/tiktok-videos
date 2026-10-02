@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Render a sim page to a TikTok-ready video file, hands-free.
+"""Render a video page to a TikTok-ready MP4, hands-free.
 
-Usage:
-    python3 render.py pokemon-evolve.html        # full round
-    python3 render.py pokemon-evolve.html 8      # quick 8-second test
+Usage (from the repo root):
+    python3 tools/render.py videos/05-naruto.html     # full round
+    python3 tools/render.py naruto                     # same thing, short name
+    python3 tools/render.py naruto 8                   # quick 8-second test
 
-Starts a local server for this folder, opens the page in headless Google Chrome
+Starts a local server for the repo, opens the page in headless Google Chrome
 with ?autorecord (so it records one full round with sound), waits for the page
 to upload the finished video, and saves it to renders/. Needs only Python 3 and
 Google Chrome — no other installs.
@@ -23,10 +24,9 @@ import tempfile
 import threading
 import urllib.parse
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repo root
 OUT_DIR = os.path.join(ROOT, "renders")
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-PORT = 8765
 ROUND_SECONDS = 120
 GRACE_SECONDS = 90   # give up if no video arrives within round + grace
 
@@ -59,13 +59,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         pass  # keep the terminal quiet
 
 
+def find_page(arg):
+    """Accept a path ('videos/05-naruto.html') or a short name ('naruto')."""
+    for cand in (arg, os.path.join(ROOT, arg), os.path.join(ROOT, "videos", arg)):
+        if os.path.isfile(cand):
+            return os.path.relpath(os.path.abspath(cand), ROOT)
+    matches = [f for f in sorted(os.listdir(os.path.join(ROOT, "videos")))
+               if f.endswith(".html") and arg.lower() in f.lower()]
+    if len(matches) == 1:
+        return os.path.join("videos", matches[0])
+    sys.exit(f"Can't find a video page matching '{arg}'. Pages: {', '.join(matches) or 'see videos/'}")
+
+
 def main():
-    page = sys.argv[1] if len(sys.argv) > 1 else "pokemon-evolve.html"
+    if len(sys.argv) < 2:
+        sys.exit(__doc__)
+    page = find_page(sys.argv[1])
     seconds = f"&seconds={sys.argv[2]}" if len(sys.argv) > 2 else ""
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)   # any free port
+    port = server.server_address[1]
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    url = f"http://127.0.0.1:{PORT}/{page}?autorecord&upload=/upload{seconds}"
+    url = f"http://127.0.0.1:{port}/{page}?autorecord&upload=/upload{seconds}"
     profile = tempfile.mkdtemp(prefix="render-chrome-")
     log_path = os.path.join(profile, "chrome.log")     # page console output, for debugging
     log = open(log_path, "w")

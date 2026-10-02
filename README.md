@@ -1,134 +1,213 @@
 # TikTok Videos
 
-Neon physics simulations built as single HTML pages, each one recorded into a vertical video for TikTok.
+Satisfying, chaotic physics simulations made for TikTok. Each video is **one self-contained HTML page**: open it to watch it play, or run one command to record it as a ready-to-post **2-minute, 1080×1920 MP4 with sound**.
 
-**Live site:** https://nikhilmath.github.io/tiktok-videos/ (GitHub Pages, serves `main`)
+**Live site:** https://nikhilmath.github.io/tiktok-videos/ (GitHub Pages, serves the `main` branch)
+
+---
+
+## Quick start
+
+| I want to… | Do this |
+|---|---|
+| Watch a video play live | Open the live site, or open `videos/<file>.html` in Chrome |
+| Get the MP4 to post | `python3 tools/render.py naruto` (any part of a file name works) → file appears in `renders/` |
+| Make a quick test video | `python3 tools/render.py naruto 8` (an 8-second round) |
+| Change how a video plays | Edit the constants at the top of its HTML file, or use its ⚙️ settings panel |
+
+Rendering needs only **Python 3** and **Google Chrome** on a Mac. Nothing to install.
+
+---
+
+## Folder layout
+
+```
+tiktok-videos/
+├── README.md            ← this guide
+├── CLAUDE.md            ← instructions for Claude Code (points here)
+├── index.html           ← live-site home page, links to every video
+├── videos/              ← one HTML file per TikTok video, numbered in order
+│   ├── 01-pokemon-evolve.html
+│   ├── 02-hunter-x-hunter.html
+│   ├── 03-sonic.html
+│   ├── 04-dragon-ball.html
+│   └── 05-naruto.html
+├── tools/
+│   └── render.py        ← records a video page to an MP4
+└── renders/             ← finished MP4s (git-ignored, never committed)
+```
 
 ---
 
 ## Rules for every video
 
-These apply to every video in this repo, not just the current one.
-
-1. **2 minutes long.** Every sim runs one round with a **2:00 countdown** at the top of the screen.
-2. **Freeze at the end.** At 0:00 the simulation stops and stays frozen on the final state. Nothing moves or spawns, and nothing resets. A "TIME'S UP!" banner says how far it got.
-3. **Leave blank space at the top.** Keep the top 180px of the video (`TOP_SPACE` = 90 units) empty so TikTok's top bar ("Following | For You") never covers the counter, timer or hook.
-4. **Hook at the top for retention.** Show a big hook at the top from the very first frame, with the timer right above it. Make it a comment prompt or question that makes people stay to see the answer (e.g. *"Comment below 👇 What will the MAX evolution be?"*). Ask a question and tell people to comment.
-5. **Vertical 9:16, 1080×1920.** Black background, neon glow style, and it must run smoothly at 60fps (pre-render anything expensive).
-6. **Sound included, automatically.** Use synthesized Web Audio with no audio files. There's no "tap for sound" prompt; sound starts on its own and is always recorded into the video.
-7. **Everything that should be in the video is drawn on the canvas.** Only the canvas is recorded. HTML overlays (buttons, settings) don't appear in the video.
-8. **One file per video, improved in place.** Each video is one self-contained `.html` file (HTML + CSS + JS, no libraries). Edit and overwrite it; don't keep old versions or "v2" copies. Finish one video completely before starting the next.
-9. **The final deliverable is a video file.** When a video is done, render it to an MP4 (see below) and post that to TikTok.
-10. **Always push to `main`.** Every finished change is committed and pushed to `main` right away so the live site is always current.
+1. **2 minutes long.** One round with a **2:00 countdown** on screen.
+2. **Freeze at the end.** At 0:00 everything stops and stays frozen on the final state. A banner shows the answer, and the recording holds the frozen frame for about 3.5 seconds.
+3. **Black space at the top and bottom.** Keep **solid black bands**, 220px on top and 380px on the bottom of the 1920px video, so TikTok's own UI never covers the action. That UI is the "Following | For You" bar at the top and the caption and username at the bottom. In code: `TOP_SPACE = 110` and `BOTTOM_SPACE = 190` (logical units; the video is 2× that).
+4. **Hook at the top for retention.** A big question that tells people to comment, visible from the very first frame. Example: *"Comment below 👇 How many CLONES at the end?"* The video then answers it at 0:00.
+5. **Something new every ~10 seconds.** New enemies, power-ups, transformations or K.O.s. Viewers scroll away from slow stretches, and the user called a slow version "very boring".
+6. **The outcome must be hard to guess.** Tune it so different runs end differently; the comments are people guessing.
+7. **Vertical 9:16, 1080×1920, 60fps.** Pre-render anything expensive (faces, sprites, backgrounds) so it never drops frames.
+8. **Sound included, automatically.** Synthesized with Web Audio, with no audio files and no "tap for sound" prompt. Sound is always recorded into the video, even if muted on screen.
+9. **Everything in the video is drawn on the canvas.** Only the canvas is recorded. HTML buttons and panels are for on-screen use only.
+10. **Characters are drawn in code.** Don't download official art. Faces are built from shapes; see the face helpers in videos 03–05.
+11. **A completely different style each time.** Check the table in "Styles used so far" below and don't repeat a look or a game mechanic. The user asked for this explicitly so viewers don't get bored.
+12. **One file per video, improved in place.** Never make "v2" copies. Finish a video before starting the next.
+13. **The deliverable is the MP4.** When a video is done, render it and hand over the file from `renders/`.
+14. **Always push to `main`.** Commit and push every finished change, so the live site stays current.
 
 ---
 
-## Making the video
+## How to make a new video (step by step)
 
-### Option A: one command (recommended)
+1. **Pick the theme and a new concept.** Choose a look and a game that aren't in "Styles used so far". Decide the hook question first: it should have an answer the video reveals at 0:00.
+2. **Start from the newest file.** Copy it to `videos/NN-name.html` (next number). Keep the shared engine (next section) and replace the theme parts: config, game rules, drawing, sound flavor and hook.
+3. **Draw the characters in code.** Use the helper patterns already in the files: `spike()` for hair, quills, ears and horns, `head()`, `cap()`, `eyes()` and so on, with one small drawing function per character. Cache each one with `getSprite()` so it's drawn once, not every frame.
+4. **Tune the pacing by simulation.** Open the page in Chrome and paste a sweep like this into the console. It runs whole rounds instantly without drawing:
 
-```bash
-python3 render.py pokemon-evolve.html
-```
+   ```js
+   Sound.setMuted(true);
+   for (let trial = 0; trial < 10; trial++) {
+     startRound();
+     const curve = [];
+     for (let i = 0; i < 7300 && !S.timeUp; i++) { update(1 / 60); if (i % 600 === 0) curve.push(/* the number you care about */); }
+     console.log(trial, curve.join(','));
+   }
+   ```
 
-This opens the page in headless Chrome, records one full round (2:00 plus about 3.5 seconds of the frozen end screen) with sound, and saves a standard **1080×1920 MP4** in `renders/`. AirDrop or upload that file to TikTok.
+   Change one knob at a time (put knobs in a `TUNING` object so you can change them from the console) until:
+   - something happens every ~10s,
+   - the last 30 seconds aren't dead,
+   - different runs end differently.
 
-- Quick test render: `python3 render.py pokemon-evolve.html 8` records an 8-second round.
-- Needs only Python 3 and Google Chrome. macOS's built-in `avconvert` converts Chrome's streaming-format recording into a normal MP4 losslessly.
-- `renders/` is git-ignored, so videos are never committed.
+5. **Stress-test the drawing.** One exception inside the draw loop stops the animation and makes renders hang. Run full rounds with drawing at video size:
 
-### Option B: the ⏺ button
+   ```js
+   Recorder.on = true; resize(); startRound();
+   for (let i = 0; i < 7600; i++) { update(1 / 60); draw(); }   // must finish with no error
+   Recorder.on = false; resize(); startRound();
+   ```
 
-Open the page (locally or on the live site) and press **⏺** in the top-right corner. It starts a fresh round, records it, and saves the MP4 when the end screen has been held for a few seconds. Press **⏹** to stop early. Keep the tab visible while recording.
+6. **Check the 1080×1920 frame.** Look at the page with `Recorder.on = true; resize();` and check that nothing overlaps and that the black bands are clear.
+7. **Update `index.html` and this README.** Add the video to the catalog and to "Styles used so far".
+8. **Commit and push to `main`.**
+9. **Render** with `python3 tools/render.py <name>`, look at a few frames, then deliver the MP4.
 
-### Page URL options
+---
+
+## The shared engine (what every video page contains)
+
+Every page is one file with the same skeleton, top to bottom:
+
+| Section | What it does |
+|---|---|
+| `CONFIG` | Round length (`ROUND_SECONDS = 120`), black bands (`TOP_SPACE`, `BOTTOM_SPACE`), `HOOK` lines, characters, `TUNING`/`Settings` |
+| `layout()` / `resize()` | Logical canvas is 540 wide (×2 = 1080px video). Tall phones fill the screen. While recording, the canvas is locked to exactly 1080×1920. |
+| `Sound` | Web Audio synth: `unlock()` (auto-starts where allowed, retries on any touch or key), `note()`, `burst()` (filtered noise), and `recordStream()`, which feeds the recorder even when muted |
+| `S` + `startRound()` | All round state; `startRound()` resets everything and the clock |
+| `step(dt)` | Fixed-step physics (240 steps a second) |
+| `update(rdt)` | Real-time clock, effects, waves and spawns. At 0:00 it calls `endRound()` and freezes. |
+| Drawing | Cached sprites and backgrounds, effects (rings, sparks, floating text, banners), the black bands drawn last |
+| `Recorder` | Records the canvas and sound with `MediaRecorder` (MP4/H.264 when available), keeps filming the freeze for `TAIL_SECONDS`, then downloads or uploads it |
+| UI / main loop | ⏺ record, 🔊 mute, ⚙️ settings, keys **M** (mute) and **R** (restart); the `requestAnimationFrame` loop |
+
+**URL options:**
 
 | Option | What it does |
 |---|---|
-| `?autorecord` | Start recording as soon as the page loads |
-| `?seconds=10` | Make the round shorter (for testing) |
-| `?upload=/path` | Send the finished video to that same-site path instead of downloading it (used by `render.py`) |
+| `?autorecord` | Start recording on load |
+| `?seconds=8` | Shorter round, for tests |
+| `?upload=/upload` | Send the finished video to the local render server instead of downloading it (used by `render.py`) |
 
 ---
 
-## Current video: `sonic.html`
+## How rendering works (`tools/render.py`)
 
-**Hook:** "Comment below 👇 Who will be the STRONGEST?"
+1. Starts a tiny local web server for the repo on a free port.
+2. Opens the page in **headless Chrome** with `?autorecord&upload=/upload` and the flag that allows sound without a tap.
+3. The page records one real-time round. When the freeze has been filmed, it POSTs the video to the server, which saves it to `renders/`.
+4. macOS's built-in `avconvert` rewrites Chrome's streaming ("fragmented") MP4 into a normal MP4 with a proper duration, losslessly. Phones, Photos and TikTok handle it cleanly.
+5. Chrome's console is logged. If no video arrives within the round plus 90 seconds, it stops and prints the page errors instead of hanging.
 
-Same engine and layout as the Hunter x Hunter video (including the top space), with Sonic characters shown as **faces** instead of names:
-
-- **Every ball that drops is Tails.** Two of the same character merge into the next one up the power ladder:
-  Tails → Amy → Rouge → Knuckles → Metal Sonic → Silver → Shadow → Sonic → **Super Sonic** → **Super Shadow** → **Hyper Sonic**
-- **Faces are drawn in code**, with no image files: neon cartoon heads in 3/4 view. Each character has its own template in `FACE_STYLES` (quills, ears, tails, dreadlocks, bangs and headband, bat ears, metal jaw) plus its own fur, eye and muzzle colors in `CHAIN`. Adding an `imageUrl` to a character draws that picture instead.
-- **Text:** "POWER UP!" the first time each character is reached. The bold names above are super forms and get the golden **"SUPER FORM!"** burst.
-- **On screen:** counter (power ups, super forms, highest, record), plus the power ladder with names under the faces.
-- **What it reaches in 2:00:** in 20 simulated rounds, 15 ended on **LV.9 Super Sonic** and 5 on LV.8 Sonic, with no overflows.
-
-## Finished: `hunter-x-hunter.html`
-
-**Hook:** "Comment below 👇 Who will be the STRONGEST?" (the `HOOK` constant)
-
-Same engine, physics, settings, sound, timer, freeze and recorder as the Pokémon video below, with Hunter x Hunter characters instead:
-
-- **Every ball that drops is Gon.** Two of the same character merge into the next one up a fan power ladder (weakest → strongest):
-  Gon → Killua → Kurapika → Knuckle → Biscuit → Feitan → Uvogin → Illumi → **Hisoka** → **Chrollo** → **Youpi** → **Pitou** → **Netero** → **Meruem**
-- **Ball colors and labels** use Nen types: Enhancer, Transmuter, Emitter, Conjurer, Manipulator, Specialist. Each ball shows the character's level, e.g. "LV.9 TRANSMUTER".
-- **Text:** "POWER UP!" the first time each character is reached. The bold names above are S-rank and get the golden **"S-RANK!"** burst instead.
-- **On screen:** counter (power ups, S-ranks, highest, record), plus a **power ladder** strip under the ring.
-- **Top space:** this is the first video with the blank band at the top (`TOP_SPACE`). It's laid out top-down: counter and timer, then the hook, then the ring. The ring is a bit smaller (radius 225) so everything still fits.
-- **What it reaches in 2:00:** in 20 simulated rounds, 16 ended on **LV.9 Hisoka** and 4 on LV.8 Illumi, with no overflows.
-- **To change the ladder:** edit `CHAIN` (order, Nen type, S-rank flag).
-
-## Finished: `pokemon-evolve.html`
-
-**Hook:** "Comment below 👇 What will the MAX evolution be?" (the `HOOK` constant)
-
-### What it does
-- A big glowing ring cycles through rainbow colors, fed by a narrow chute at the top.
-- **Every ball that drops is a Bulbasaur**, one every 0.25 seconds. Video settings: gravity 1750, bounciness 0.80.
-- **Two of the same Pokémon merge into the next one in Pokédex order.** It's one straight line with no branching: Bulbasaur → Ivysaur → Venusaur → Charmander → … → Mewtwo → Mew (all 151 from Gen 1).
-- Each ball shows the Pokémon's name, Pokédex number and type, in its type's color. Balls get bigger the further along the chain they are.
-- **Effects:**
-  - **Every merge:** small ring burst, sparks and a chime, with no text.
-  - **First time a Pokémon is reached in the round:** a floating "EVOLVED!" with its name. If it's fully evolved (like Venusaur or Charizard), you get **"FINAL FORM!"** with a golden burst, screen flash and a chord instead.
-  - **"NEW RECORD!"** (when it beats the all-time best, from #006 on): rainbow banner and 30% slow motion for 2 seconds.
-- **Physics:** gravity, bouncy walls, mass-based ball collisions, and a random sideways kick as each ball leaves the chute.
-- **Sound:** musical blips on wall hits (pitch depends on where the ball hits), rising chimes, chords, ticks in the last 5 seconds, and a bell at time's up.
-- **On screen:** counter (evolutions, Final Forms, highest this round, all-time record), 2:00 timer (red and pulsing for the last 10 seconds), and a Pokédex progress strip under the ring.
-- **Overflow:** if balls back up into the chute for 3 seconds, "OVERFLOW!" shows and the ring clears. The clock and round stats keep going.
-- **Controls (not in the video):**
-  - Tap inside the ring to drop a Bulbasaur.
-  - ⚙️ settings: spawn rate, gravity, bounciness, Reset, Clear Record.
-  - 🔊 mute (only mutes your speakers; recordings still have sound).
-  - Keys: **M** mutes, **R** restarts the round.
-
-### What it reaches in 2 minutes
-With the video settings, about 480 Bulbasaurs drop in 2:00. Each step needs twice as many as the step before, so the realistic ceiling is #008 Wartortle (128 Bulbasaurs) or #009 Blastoise (256). In 20 simulated rounds, 12 ended on **#009 Blastoise** and 8 on **#008 Wartortle**, with no overflows.
-
-### Customizing
-- **Round length:** `ROUND_SECONDS` (keep it at 120).
-- **Ball sizes:** `radiusForTier`.
-- **Defaults:** `Settings` (spawn rate, gravity, bounciness). These are the values the video uses.
-- **Pictures instead of names:** set `SPRITE_URL` to show a sprite image inside every ball. There's an example in the code comment.
+The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects a file that size, upload it on tiktok.com instead.
 
 ---
 
-## Starting the next video
+## Gotchas (learned the hard way)
 
-1. Create a new single `.html` file in this folder, using the newest video as the template (currently `sonic.html`). It has the top-space layout and drawn faces. Reuse its timer, freeze, recorder, sound setup, canvas sizing and neon look.
-2. Write a new hook question for the top.
-3. Keep the 2:00 round and the freeze at the end.
-4. Add it to `index.html`.
-5. Iterate in place until it looks right, pushing to `main` after each change.
-6. Render the final MP4 with `render.py` and post it.
+- **Never let the frame time go negative.** The first `requestAnimationFrame` timestamp can be *earlier* than the page's start time. Use `clamp((now - lastT) / 1000, 0, 1 / 20)`.
+- **Never pass a negative radius** to `arc()` or `createRadialGradient()`. It throws, which kills the animation loop, so renders hang. This happened because `easeOutBack(0)` rounded to `-2e-16`; it now returns exactly 0 at the start.
+- **`shadowBlur` ignores the canvas transform.** Multiply it by `scale` (the `blur()` helper).
+- **Browsers block sound until the first tap.** Pages try to start sound on load anyway, and the render uses a Chrome flag to allow it. Phones still need one tap.
+- **`localStorage` can be blocked** (private mode, `file://`/`data:` previews), so always wrap it in `try/catch`.
+- **Balancing:** fixed enemy strength tends to tip into "enemies always win" or "the swarm always wins". Scaling with the game state fixed it in 05-naruto, where villain HP grows with the clone count.
 
-## Files
+---
 
-| File | Purpose |
-|---|---|
-| `sonic.html` | Current video: Sonic power ladder with drawn faces |
-| `hunter-x-hunter.html` | Finished video: Hunter x Hunter power ladder |
-| `pokemon-evolve.html` | Finished video: Pokédex evolution chain |
-| `index.html` | Live-site home page that links to each video |
-| `render.py` | Renders a page to a TikTok-ready MP4 in `renders/` |
-| `CLAUDE.md` | Instructions for Claude Code (points here) |
+## Video catalog
+
+| # | File | Hook | Typical outcome |
+|---|---|---|---|
+| 01 | `videos/01-pokemon-evolve.html` | Comment below 👇 What will the MAX evolution be? | #009 Blastoise (60%) or #008 Wartortle |
+| 02 | `videos/02-hunter-x-hunter.html` | Comment below 👇 Who will be the STRONGEST? | LV.9 Hisoka (80%) or LV.8 Illumi |
+| 03 | `videos/03-sonic.html` | Comment below 👇 Who will be the STRONGEST? | LV.9 Super Sonic (75%) or LV.8 Sonic |
+| 04 | `videos/04-dragon-ball.html` | Comment below 👇 Who will win the TOURNAMENT? | Any of the 12 can win; about 40% end in a decision with 2 left |
+| 05 | `videos/05-naruto.html` | Comment below 👇 How many CLONES at the end? | Anywhere from about 5 to 220 clones |
+
+### 01 · Pokémon: Pokédex evolution chain
+- **Look:** neon on black, a glowing ring that cycles through rainbow colors, a chute at the top.
+- **Spawning:** every ball is **Bulbasaur**, one every 0.25s.
+- **Merging:** two of the same merge into the next Pokémon in **Pokédex order** (Bulbasaur → … → Mew, all 151 from Gen 1).
+- **Text:** "EVOLVED!" and "FINAL FORM!" only appear the first time each Pokémon is reached.
+- **Records:** "NEW RECORD!" gives slow motion and a rainbow banner.
+- **Settings:** gravity 1750, bounciness 0.80.
+- **Predates the band rules:** made before the top/bottom black bands existed.
+
+### 02 · Hunter x Hunter: power ladder
+- **Engine:** same as 01.
+- **Spawning:** every ball is **Gon**; merges climb a fan power ranking: Gon → Killua → … → Netero → Meruem.
+- **Colors and labels:** by Nen type, with "LV.n" labels. The top tier gets "S-RANK!".
+- **Layout:** the first video with blank top space (no bottom band).
+
+### 03 · Sonic: power ladder with drawn faces
+- **Engine:** same as 02.
+- **Spawning:** every ball is **Tails**; merges climb to Super Sonic, Super Shadow and Hyper Sonic.
+- **Faces:** drawn in code, as 3/4-view cartoon heads (`FACE_STYLES`: quills, ears, twin tails, dreadlocks, bat ears, metal jaw).
+
+### 04 · Dragon Ball: tournament battle royale
+- **Look:** completely different from 01–03. Manga/comic style: cream paper with halftone, speed lines, thick ink outlines, logo-style hook text, comic "POW!/BAM!/K.O.!" bursts and screen shake.
+- **Game:** 12 fighters with code-drawn manga faces fight top-down (no gravity) on a tournament stage.
+  - Every clash does damage, and fighters steer toward the nearest opponent.
+  - A K.O. powers up the winner.
+  - **Dragon Balls** (1–7 stars) trigger transformations: Super Saiyan, Super Saiyan Blue, Golden Frieza, Orange Piccolo…
+  - "IT'S OVER 9000!" fires the first time someone passes it.
+- **Ending:** last fighter standing, or a decision by HP at 0:00. The winner gets a crown.
+- **Tuning:** `BASE_DAMAGE = 0.95` makes the last K.O. land between about 1:15 and 2:00.
+- **Layout:** the first video with **black bands top and bottom**.
+
+### 05 · Naruto: Shadow Clone Chaos (deliberately weird)
+- **Look:** an *Infinite Tsukuyomi* red-moon world: crimson sky, drifting ash, kanji columns. The arena is a giant red moon with turning Rinne-Sharingan rings, and the screen does an inverted-color glitch flash at big moments. Characters are **floating heads**.
+- **Game:**
+  - The **real Naruto** (can't be popped) keeps splitting into shadow clones that swirl inside the moon.
+  - **Villain waves every ~10–12s:** Gaara, Orochimaru, Kisame, Itachi, Deidara and Obito, Pain, Madara, doubles, then Kaguya.
+  - Villains pop clones on contact and use jutsu (Amaterasu, Shinra Tensei, Kamui…).
+  - Mobbing a villain defeats it ("RASENGAN!") and starts a Sage Mode clone frenzy.
+  - Beating the final villain triggers a clone explosion until the end.
+- **Balance:** villain HP scales with the current clone count (`TUNING.hpPerClone`), so every wave bites and the count rises and crashes in waves.
+- **Sound:** taiko drum loop, smoke-poof crackles, villain drones, gong.
+
+---
+
+## Styles used so far (pick something different next time)
+
+| # | Look | Arena | Game mechanic | Sound |
+|---|---|---|---|---|
+| 01 | Neon on black, rainbow ring | Circle and chute, gravity | Merge two of the same → next in a chain | Pentatonic blips, chimes |
+| 02 | Neon on black | Circle and chute, gravity | Merge chain (power ladder) | Same as 01 |
+| 03 | Neon on black, cartoon faces | Circle and chute, gravity | Merge chain (power ladder) | Same as 01 |
+| 04 | Manga/comic paper, ink, halftone | Square stage, top-down | Battle royale with HP, K.O.s, power-up pickups | Punchy hits, booms, risers |
+| 05 | Red-moon horror-fantasy, glitch flashes | The moon, swirling vortex | Swarm growth vs. enemy waves (guess the number) | Taiko loop, poofs, drones |
+
+**Not used yet:**
+- **Looks:** pixel-art/retro 16-bit, chalkboard doodle, vaporwave, underwater, blueprint, stained glass, claymation-like soft shapes, newspaper print.
+- **Mechanics:** marble race to a finish line, elimination bracket, king of the hill (stay in a shrinking zone), tug-of-war, gravity flips, a survival countdown where items fall from the sky, territory painting (who covers the most area).

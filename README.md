@@ -12,7 +12,7 @@ These apply to every video in this repo, not just the current one.
 
 1. **2 minutes long.** Every sim runs one round with a **2:00 countdown** at the top of the screen.
 2. **Freeze at the end.** At 0:00 the simulation stops and stays frozen on the final state. Nothing moves or spawns, and nothing resets. A "TIME'S UP!" banner says how far it got.
-3. **Hook at the top for retention.** Show a big hook at the top from the very first frame, with the timer right above it. Make it a comment prompt or question that makes people stay to see the answer (e.g. *"Write in the comments what the MAX evolution will be!"*).
+3. **Hook at the top for retention.** Show a big hook at the top from the very first frame, with the timer right above it. Make it a comment prompt or question that makes people stay to see the answer (e.g. *"Comment below 👇 What will the MAX evolution be?"*). Ask a question and tell people to comment.
 4. **Vertical 9:16, 1080×1920.** Black background, neon glow style, and it must run smoothly at 60fps (pre-render anything expensive).
 5. **Sound included, automatically.** Use synthesized Web Audio with no audio files. There's no "tap for sound" prompt; sound starts on its own and is always recorded into the video.
 6. **Everything that should be in the video is drawn on the canvas.** Only the canvas is recorded. HTML overlays (buttons, settings) don't appear in the video.
@@ -52,11 +52,11 @@ Open the page (locally or on the live site) and press **⏺** in the top-right c
 
 ## Current video: `pokemon-evolve.html`
 
-**Hook:** "Write in the comments what the MAX evolution will be!" (the `HOOK` constant)
+**Hook:** "Comment below 👇 What will the MAX evolution be?" (the `HOOK` constant)
 
 ### What it does
 - A big glowing ring cycles through rainbow colors, fed by a narrow chute at the top.
-- **Every ball that drops is a Bulbasaur**, one every 0.8 seconds.
+- **Every ball that drops is a Bulbasaur**, one every 0.25 seconds. Video settings: gravity 1750, bounciness 0.80.
 - **Two of the same Pokémon merge into the next one in Pokédex order.** It's one straight line with no branching: Bulbasaur → Ivysaur → Venusaur → Charmander → … → Mewtwo → Mew (all 151 from Gen 1).
 - Each ball shows the Pokémon's name, Pokédex number and type, in its type's color. Balls get bigger the further along the chain they are.
 - **Effects:**
@@ -74,14 +74,12 @@ Open the page (locally or on the live site) and press **⏺** in the top-right c
   - Keys: **M** mutes, **R** restarts the round.
 
 ### What it reaches in 2 minutes
-About 150 Bulbasaurs drop in 2:00. Each step needs twice as many as the step before, so #007 Squirtle (64 Bulbasaurs) is the realistic ceiling. In 40 simulated rounds, 38 ended on **#007 Squirtle** and 2 on #006 Charizard, with no overflows.
-
-To change that, lower **Spawn every** in settings. About 0.45s gets to #009 Blastoise (256 Bulbasaurs) within 2:00.
+With the video settings, about 480 Bulbasaurs drop in 2:00. Each step needs twice as many as the step before, so the realistic ceiling is #008 Wartortle (128 Bulbasaurs) or #009 Blastoise (256). In 20 simulated rounds, 12 ended on **#009 Blastoise** and 8 on **#008 Wartortle**, with no overflows.
 
 ### Customizing
 - **Round length:** `ROUND_SECONDS` (keep it at 120).
 - **Ball sizes:** `radiusForTier`.
-- **Defaults:** `Settings` (spawn rate, gravity, bounciness).
+- **Defaults:** `Settings` (spawn rate, gravity, bounciness). These are the values the video uses.
 - **Pictures instead of names:** set `SPRITE_URL` to show a sprite image inside every ball. There's an example in the code comment.
 
 ---

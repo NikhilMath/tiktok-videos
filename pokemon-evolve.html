@@ -225,7 +225,7 @@ const TIERS = CHAIN.map(([name, type, final, imageUrl], i) => ({
 const START = TIERS[0];              // only Bulbasaur ever spawns
 
 // User-tweakable settings (bound to the sliders).
-const Settings = { spawnInterval: 0.8, gravity: 900, bounce: 0.72 };
+const Settings = { spawnInterval: 0.25, gravity: 1750, bounce: 0.8 };
 
 /* =====================================================================
    CANVAS, SIZING & LAYOUT
@@ -243,7 +243,7 @@ const L = {};     // arena layout
 function layout() {
   L.cx = LW / 2;
   L.R = 240;                          // inner radius of the ring (collision surface)
-  L.cy = LH / 2 + 75;
+  L.cy = LH / 2 + 95;
   L.hw = 30;                          // half-width of the chute
   L.chuteTop = L.cy - L.R - 105;
   L.gapY = L.cy - Math.sqrt(L.R * L.R - L.hw * L.hw);  // where the chute meets the ring
@@ -251,7 +251,7 @@ function layout() {
   L.title2 = L.chuteTop - 88;         // hook: big gold lines
   L.title3 = L.chuteTop - 42;
   L.timerY = L.title1 - 42;           // round countdown above the hook
-  L.ladderY = L.cy + L.R + 92;        // Pokédex progress strip under the ring
+  L.ladderY = L.cy + L.R + 84;        // Pokédex progress strip under the ring
 }
 
 const VIDEO_W = 1080;   // recorded video is 1080×1920 (TikTok's native size)
@@ -883,7 +883,7 @@ function drawBall(b) {
 
 // The hook: a comment prompt at the top for retention.
 // First line is a smaller white lead-in, the rest is big neon gold.
-const HOOK = ['Write in the comments', 'what the MAX', 'evolution will be!'];
+const HOOK = ['Comment below 👇', 'What will the MAX', 'evolution be?'];
 
 function drawTitle() {
   const hue = (S.time * 25) % 360;
@@ -1159,8 +1159,8 @@ function drawStats() {
   ctx.save();
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  ctx.font = `800 13px ${FONT}`;
-  let y = safeTop + 14;
+  ctx.font = `800 12px ${FONT}`;
+  let y = safeTop + 12;
   for (const [label, val] of rows) {
     ctx.fillStyle = '#fff';
     ctx.shadowColor = 'rgba(255,255,255,0.6)';
@@ -1171,7 +1171,7 @@ function drawStats() {
     ctx.shadowColor = '#FFB300';
     ctx.shadowBlur = blur(8);
     ctx.fillText(val, x, y);
-    y += 17.5;
+    y += 16;
   }
   ctx.restore();
 }

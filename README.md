@@ -34,7 +34,8 @@ tiktok-videos/
 │   ├── 05-naruto.html
 │   ├── 06-one-piece.html
 │   ├── 07-brainrot-race.html
-│   └── 08-pokemon-go-team-war.html
+│   ├── 08-pokemon-go-team-war.html
+│   └── 09-pokemon-go-ball-rain.html
 ├── tools/
 │   └── render.py        ← records a video page to an MP4
 ├── ball-battle/         ← separate Python generator: two weapon balls fight (see ball-battle/README.md)
@@ -152,6 +153,7 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 - **Marble tracks jam where a ramp drops onto the next one.** A column of marbles wedges between the wall and the end of the upper ramp. Keep the gap wide, leave headroom under each ramp end, and nudge a stuck marble *sideways along its ramp*, not straight up (kicking everything up just rebuilds the jam).
 - **Moving obstacles need an escape window.** 07's swinging pizzas first blocked the track for the whole swing and trapped marbles in a loop. They now rise clear of the track at the ends of each swing and aren't bouncy.
 - **In a territory game, a target inside one team's land can only be reached by that team.** 08's raid boss sat on a gym and was almost never beaten (2–11 hits against 14 HP). Clearing a neutral zone around it and pulling everyone in made raids contested and winnable (about 85%).
+- **A schedule needs a lever on both sides.** 09's throw controller could only throw *less* when catches ran ahead, but un-aimed throws still caught Pokémon and the round was decided ~35s early. What fixed it: deliberate misses for the chaos, an adaptive aimed share, and a rubber band on the catch chance itself (`pace()`).
 - **Don't give a method the same name as a property.** `Sound.out()` was silently replaced by the `Sound.out` gain node, so the first elimination threw.
 - **Previewing in the Claude desktop app:** its preview server can't read `~/Documents` (a macOS permission). Start `python3 -m http.server 8765` in a terminal instead; `.claude/launch.json` has a "site" entry that attaches to it.
 
@@ -169,6 +171,7 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 | 06 | `videos/06-one-piece.html` | Comment below 👇 What will the MAX BOUNTY be? | Luffy ฿3B (about 58%) or Zoro ฿1.111B, often decided in the last 20 seconds |
 | 07 | `videos/07-brainrot-race.html` | Comment below 👇 Which BRAINROT WINS the RACE? | Any of the 12 can win (each about 7–11% over 300 simulated rounds); decided 2–8s before 0:00 |
 | 08 | `videos/08-pokemon-go-team-war.html` | Comment below 👇 Which TEAM takes over the MAP? | Any of the 3 teams (19/21/20 wins over 60 simulated rounds); usually decided by 1–10%, and the lead changes in the last 25s in about 80% of rounds |
+| 09 | `videos/09-pokemon-go-ball-rain.html` | Comment below 👇 Which POKÉMON NEVER gets CAUGHT? | Any of the 12 (each about 2–13% over 200 simulated rounds); decided about 0–20s before 0:00 (median ~9s); about 5% end with 2 escapees |
 
 ### 01 · Pokémon: Pokédex evolution chain
 - **Look:** neon on black, a glowing ring that cycles through rainbow colors, a chute at the top.
@@ -259,6 +262,18 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 - **Sound:** a marimba "walking around the map" loop (C–Am–F–G), a different pop per team when cells flip (glassy, warm, zappy), notification dings, bird cries, villain motif and bombs, rain and thunder, raid hits and a fanfare in the winner's key.
 - **Tap the map** to drop in a new Pokémon for whichever team owns that spot.
 
+### 09 · Pokémon GO: Poké Ball Rain (survival)
+- **Why:** the second Pokémon GO video. The 1-2-3 wobble and "broke free!" are the most suspenseful moment in the game.
+- **Look:** an **AR camera at golden hour**: a city park seen through a phone viewfinder (corner brackets, "AR" badge, vignette, film grain, lens flare from a low sun). The sun sets over the 2 minutes: golden hour fades to dusk, the skyline's windows light up, stars come out and the lamp posts switch on. Lettering is bold italic, like the game's "Excellent!" text. The HUD is translucent camera-app pills.
+- **Game:** 12 wild Pokémon (drawn in code, side view, with walking feet) live on the lawn, a bench, a playground deck and a rock. Poké Balls rain down; a ball that hits a Pokémon pulls it in, then **wobble, wobble, wobble → GOTCHA!**, or it **BROKE FREE!** at any wobble. The last Pokémon never caught wins.
+  - **The cast and their moves:** Pikachu (Quick Attack dash), Bulbasaur (Vine Whip swats a ball away), Charmander (Ember burns a ball), Squirtle (Water Gun), Eevee (Dig), Jigglypuff (puffs up and floats), Snorlax (never moves; Thick Fat bounces balls off), Gengar (phases through balls), Magikarp (Splash… but nothing happened), Abra (Teleport), Ditto (transforms into a Poké Ball), Mew (flies; Psychic barrier).
+  - **GO details:** the shrinking catch ring (green/yellow/orange/red by catch rate) shows on targeted Pokémon, and its size at impact gives Nice!/Great!/Excellent!. Catch chance = base rate × ball × throw × curveball × berry.
+- **Events about every 10s:** Great Balls (0:09), Ultra Balls (0:39), Night Falls (Gengar gets stronger, 1:18), Master Ball (locks on and homes in, 1:38), Final Throws (last 12s), plus a shuffled set: Razz Berries, Golden Razz Berry, Curveballs, Team GO Rocket's balloon vacuuming up balls, Windy, Excellent Throws. Fireworks once a winner is decided.
+- **Pacing (two controllers):** a rising "rain" of throws keeps it chaotic, and the share aimed at Pokémon adapts so catches follow a schedule (`throwPlan()`). On top of that, `pace()` makes Pokémon break free more often when catches run ahead of schedule (and less often when behind). The last free Pokémon can't be caught while another is still wobbling, so it never ends with zero.
+- **Ending:** "LAST ONE LEFT!" with fireworks, then at 0:00 "NEVER CAUGHT!" with the winner in a spotlight (or "2 ESCAPED!"). A ball still wobbling at 0:00 is settled on the spot.
+- **Sound:** an E-minor "wild encounter" groove (kick, claps, octave synth bass, stabs), throw whooshes, the capture zap, click-clack wobbles, a Gotcha chime, a breakout pop, a sound for each special move, and fireworks.
+- **Tap** a Pokémon to throw a ball at it (or anywhere to throw one there).
+
 ### Ball Battle (Python generator, `ball-battle/`)
 - **What it is:** a separate tool, made from the user's own spec, so its rules differ from the HTML videos.
 - **Video:** 30–60 second fights, an end freeze of 2 seconds, and a layout that keeps clear of TikTok's bottom 20% and right edge.
@@ -280,11 +295,12 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 | 06 | Treasure map, wooden ship's wheel, wanted posters | Wheel and chute, gravity, sea inside | Merge chain (the user asked for 01's game) + sea events | Coins, wood knocks, shanty, ocean |
 | 07 | Claymation: pastel clay diorama, squash & stretch | Vertical stack of ramps, rebuilt every floor | Marble race in elimination heats (last one out) + special moves, track flips | Tarantella mandolin, boings, plops, sad trombone |
 | 08 | Pokémon GO map: pastel top-down city, white GO-style cards and pills | Grid of cells over the city, no gravity | Territory painting (color war: flip a rival's cell, bounce off) + legendary-bird swoops, weather, raids | Marimba map loop, per-team flip pops, bird cries |
+| 09 | AR camera at golden hour: sunset park, lens flare, film grain, viewfinder; fades to night | Side view: lawn, bench, playground deck, rock, gravity | Survival: items fall from the sky (Poké Balls), 1-2-3 wobble catch or break free, last one uncaught wins | Encounter groove (claps, synth bass), wobble clicks, Gotcha chime |
 | Ball Battle | Dark neon arena, glow and trails (Python) | Circle, no gravity, +5% speed per bounce | 1v1 spinning-weapon duel with HP | Generated blips, thuds, metal clangs |
 
 **Not used yet:**
 - **Looks:** pixel-art/retro 16-bit, chalkboard doodle, vaporwave, underwater, blueprint, stained glass, newspaper print.
-- **Mechanics:** elimination bracket (head-to-head), king of the hill (stay in a shrinking zone), tug-of-war, gravity flips, a survival countdown where items fall from the sky.
+- **Mechanics:** elimination bracket (head-to-head), king of the hill (stay in a shrinking zone), tug-of-war, gravity flips.
 
 **Next up** (trending ideas the user liked, 2026-10-02; 07 was the first of them):
 - **Escape the rings:** balls in ~50 spinning rings with gaps; each escape breaks a ring and adds balls. "How many rings will break?" Look: vaporwave.

@@ -1,0 +1,2415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Pokémon GO Ball Rain: Which Pokémon Never Gets Caught?</title>
+<style>
+  /* ---------- Page shell: black, no scrolling, stage centered ---------- */
+  html, body {
+    margin: 0; height: 100%; background: #000; overflow: hidden;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+
+  /* The stage is sized by JS to a 9:16 (or taller) portrait box.
+     --u = CSS pixels per logical unit (logical width is 540). */
+  #stage { position: relative; --u: 1px; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  /* ---------- Recording indicator (on screen only, not in the video) ---------- */
+  #recBadge {
+    position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + var(--u) * 14);
+    transform: translateX(-50%); padding: calc(var(--u) * 6) calc(var(--u) * 14);
+    border-radius: 999px; background: rgba(230, 57, 70, 0.92); color: #fff;
+    font: 800 calc(var(--u) * 14) system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: 0.08em; pointer-events: none;
+  }
+  #recBadge[hidden] { display: none; }
+
+  /* ---------- Buttons (record / mute / settings), camera-app style ---------- */
+  #btns {
+    position: absolute;
+    right: calc(var(--u) * 12);
+    top: calc(env(safe-area-inset-top, 0px) + var(--u) * 10);
+    display: flex; gap: calc(var(--u) * 8);
+  }
+  .iconBtn {
+    width: calc(var(--u) * 38); height: calc(var(--u) * 38);
+    border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.85);
+    background: rgba(20, 16, 30, 0.55); color: #fff; cursor: pointer;
+    font-size: calc(var(--u) * 16); line-height: 1; padding: 0;
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  }
+  #recBtn.on { background: #E63946; }
+
+  /* ---------- Settings panel (frosted glass) ---------- */
+  #panel {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: calc(var(--u) * 380); padding: calc(var(--u) * 20);
+    background: rgba(28, 20, 40, 0.82); border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: calc(var(--u) * 24); color: #fff;
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    font: 700 calc(var(--u) * 15) "Avenir Next", Avenir, system-ui, sans-serif;
+  }
+  #panel[hidden] { display: none; }
+  #panel h2 { margin: 0 0 calc(var(--u) * 14); font-size: calc(var(--u) * 22); text-align: center; letter-spacing: 0.08em; font-style: italic; }
+  #panel label { display: block; margin-bottom: calc(var(--u) * 14); }
+  #panel label span { float: right; color: #FFC75A; }
+  #panel input[type=range] { width: 100%; margin-top: calc(var(--u) * 6); accent-color: #FF8A3D; }
+  .row { display: flex; gap: calc(var(--u) * 10); margin-top: calc(var(--u) * 6); }
+  .row button {
+    flex: 1; padding: calc(var(--u) * 10); cursor: pointer; border-radius: 999px; border: none;
+    font: 800 calc(var(--u) * 14) "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: 0.04em;
+    color: #FFFFFF; background: linear-gradient(90deg, #FF6A88, #FF9A3D);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="recBadge" hidden>● REC 0:00</div>
+
+  <div id="btns">
+    <button class="iconBtn" id="recBtn" aria-label="Record a video">⏺</button>
+    <button class="iconBtn" id="muteBtn" aria-label="Toggle sound">🔊</button>
+    <button class="iconBtn" id="setBtn" aria-label="Settings">⚙️</button>
+  </div>
+
+  <div id="panel" hidden>
+    <h2>SETTINGS</h2>
+    <label>Throws <span id="vThrow"></span>
+      <input id="inThrow" type="range" min="0.5" max="2" step="0.05">
+    </label>
+    <label>Special moves <span id="vMoves"></span>
+      <input id="inMoves" type="range" min="0" max="2" step="0.1">
+    </label>
+    <div class="row">
+      <button id="resetBtn">RESTART</button>
+      <button id="closeBtn">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   CONFIG
+   ===================================================================== */
+
+const TAU = Math.PI * 2;
+const GO = '"Avenir Next", Avenir, "Nunito", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif';
+const INK = '#2A2033';        // outlines (warm dark plum)
+
+// Length of one round. When the clock hits 0:00 everything freezes in place.
+const ROUND_SECONDS = 120;   // 2:00
+
+// Solid black bands at the top and bottom so TikTok's UI never covers the
+// action: 220px on top, ~285px at the bottom of the 1920px video.
+const TOP_SPACE = 110;
+const BOTTOM_SPACE = 142;
+
+// The hook: a comment prompt + question at the top for retention.
+const HOOK = ['Comment below 👇', 'Which POKÉMON', 'NEVER gets CAUGHT?'];
+
+/* The 12 wild Pokémon in the park, each drawn in code (see FACES).
+   rate = how easy it is to catch (the catch ring's color in the game);
+   alert = how often it notices a ball coming; move = its special move. */
+const POKEMON = [
+  { id: 'pikachu',    name: 'Pikachu',    r: 17, speed: 125, jump: 540, alert: 0.62, rate: 0.2, ability: 'dash',      move: 'QUICK ATTACK!', color: '#FFD83A' },
+  { id: 'bulbasaur',  name: 'Bulbasaur',  r: 18, speed: 85,  jump: 440, alert: 0.5,  rate: 0.24, ability: 'vine',      move: 'VINE WHIP!',    color: '#5DBE6E' },
+  { id: 'charmander', name: 'Charmander', r: 17, speed: 100, jump: 480, alert: 0.5,  rate: 0.22, ability: 'ember',     move: 'EMBER!',        color: '#FF8A3D' },
+  { id: 'squirtle',   name: 'Squirtle',   r: 17, speed: 90,  jump: 460, alert: 0.5,  rate: 0.25, ability: 'water',     move: 'WATER GUN!',    color: '#5BB8F0' },
+  { id: 'eevee',      name: 'Eevee',      r: 17, speed: 110, jump: 500, alert: 0.45, rate: 0.26, ability: 'dig',       move: 'DIG!',          color: '#C98A4E' },
+  { id: 'jigglypuff', name: 'Jigglypuff', r: 17, speed: 70,  jump: 560, alert: 0.5 , rate: 0.18, ability: 'puff',      move: 'PUFF UP!',      color: '#FF9CC2' },
+  { id: 'snorlax',    name: 'Snorlax',    r: 28, speed: 0,   jump: 0,   alert: 0,    rate: 0.17, ability: 'rest',      move: 'THICK FAT!',    color: '#4E8295' },
+  { id: 'gengar',     name: 'Gengar',     r: 18, speed: 95,  jump: 490, alert: 0.5,  rate: 0.21, ability: 'phase',     move: 'PHANTOM!',      color: '#8E6BD0' },
+  { id: 'magikarp',   name: 'Magikarp',   r: 17, speed: 0,   jump: 430, alert: 0.4,  rate: 0.2, ability: 'splash',    move: 'SPLASH!',       color: '#FF6A3D' },
+  { id: 'abra',       name: 'Abra',       r: 17, speed: 40,  jump: 300, alert: 0.6,  rate: 0.17, ability: 'teleport',  move: 'TELEPORT!',     color: '#E8B83A' },
+  { id: 'ditto',      name: 'Ditto',      r: 17, speed: 55,  jump: 360, alert: 0.45, rate: 0.24, ability: 'transform', move: 'TRANSFORM!',    color: '#B98BE0' },
+  { id: 'mew',        name: 'Mew',        r: 15, speed: 120, jump: 0,   alert: 0.5,  rate: 0.12, ability: 'barrier',   move: 'PSYCHIC!',      color: '#FF9AC8', fly: true },
+];
+
+// Ball types. mult = catch bonus (the Master Ball never fails).
+const BALL_KINDS = {
+  poke:   { name: 'POKÉ BALL',   mult: 1.0, top: '#EE3B3B' },
+  great:  { name: 'GREAT BALL',  mult: 1.5, top: '#2F7BF5' },
+  ultra:  { name: 'ULTRA BALL',  mult: 2.0, top: '#2B2B30' },
+  master: { name: 'MASTER BALL', mult: 99,  top: '#7B3FC4' },
+};
+const THROWS = [                     // throw quality, from the shrinking catch ring
+  { text: 'Nice!', mult: 1.0, color: '#7CE38B' },
+  { text: 'Great!', mult: 1.3, color: '#6CC8FF' },
+  { text: 'Excellent!', mult: 1.7, color: '#FFD23F' },
+];
+
+/* The park, in arena units: x matches the screen, y = 0 is the top of the
+   arena. Walls at 20 and 470 keep the action clear of TikTok's buttons. */
+const AX0 = 20, AX1 = 470;
+const GROUND = 478;
+const HORIZON = 330;
+const BALL_R = 8.5;
+const SEG_T = 6;
+const PLATFORMS = [
+  { kind: 'bench', x1: 52, x2: 150, y: GROUND - 44 },
+  { kind: 'gym',   x1: 196, x2: 292, y: GROUND - 100 },
+];
+const ROCK = { x1: 330, x2: 440, peak: GROUND - 40 };
+
+// User-tweakable settings (bound to the sliders).
+const Settings = { throws: 1, moves: 1 };
+
+/* Tuning knobs, chosen by simulating many rounds in the console (README →
+   "Tune the pacing by simulation"). The throw rate adapts so the last catch
+   lands just before 0:00. */
+const TUNING = {
+  gMon: 1500, gBall: 950,
+  aimErr: 34,                      // how far off an aimed throw lands (units)
+  strayCatch: 0.25,                // chance an un-aimed ball that hits someone catches them
+  minRate: 0.6, rampRate: 0.011, maxRate: 3.2, endMargin: 8,
+  abilityChance: 0.6, breakInvuln: 1.4,
+  paceCurve: 1.0, paceK: 0.6,      // catch-chance rubber band (see pace())
+  snorlaxBounce: 0.25,
+};
+
+/* =====================================================================
+   CANVAS, SIZING & LAYOUT
+   ===================================================================== */
+
+const stage = document.getElementById('stage');
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const LW = 540;   // logical width; everything is laid out in these units
+let LH = 960;     // logical height (grows on phones taller than 9:16)
+let scale = 1;    // device pixels per logical unit
+const L = {};     // layout
+
+// Laid out top-down inside a 960-tall block (centered on taller phone screens):
+// black band, hook + timer + Pokémon strip, the park, black band.
+function layout() {
+  const block = (LH - 960) / 2;
+  const top = block + TOP_SPACE;
+  L.cx = LW / 2;
+  L.panelTop = top;
+  L.panelBottom = block + 960 - BOTTOM_SPACE;
+  L.hudY = top + 24;                  // timer (left), "x LEFT" (right), "Comment below" (middle)
+  L.title2 = top + 66;                // hook: big lines
+  L.title3 = top + 110;
+  L.stripY = top + 154;               // the 12 Pokémon: still free, or caught
+  L.arenaTop = top + 178;             // arena y = 0
+  L.acx = (AX0 + AX1) / 2;
+}
+
+const VIDEO_W = 1080;   // recorded video is 1080×1920 (TikTok's native size)
+
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  let cssW, cssH;
+  if (Recorder.on) {                  // recording: exact 9:16 frame, fitted to the window
+    cssH = Math.min(wh, ww * 16 / 9); cssW = cssH * 9 / 16; LH = 960;
+  } else if (wh / ww >= 16 / 9) {     // tall phone: fill the whole screen
+    cssW = ww; cssH = wh; LH = LW * wh / ww;
+  } else {                            // wider screen: 9:16 box, letterboxed in black
+    cssH = wh; cssW = wh * 9 / 16; LH = 960;
+  }
+  stage.style.width = cssW + 'px';
+  stage.style.height = cssH + 'px';
+  stage.style.setProperty('--u', (cssW / LW) + 'px');
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);   // cap for phone performance
+  scale = Recorder.on ? VIDEO_W / LW : (cssW / LW) * dpr;
+  canvas.width = Math.round(LW * scale);
+  canvas.height = Math.round(LH * scale);
+  layout();
+
+  sprites.clear();                    // everything cached is drawn at device resolution
+  buildScenery();
+}
+
+/* =====================================================================
+   HELPERS
+   ===================================================================== */
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[(Math.random() * arr.length) | 0];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+// Overshooting pop-in. Exactly 0 at the start: float rounding would otherwise give a
+// tiny negative number, and a negative arc/gradient radius throws and stops the loop.
+const easeOutBack = t => (t <= 0 ? 0 : 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2));
+const blur = px => px * scale;      // shadowBlur ignores the canvas transform
+const gauss = () => (Math.random() + Math.random() + Math.random() - 1.5) / 0.5;   // roughly normal, sd ≈ 1
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+// Colors: mix two #rrggbb colors (t = 0 → a, 1 → b).
+function mix(a, b, t) {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = s => Math.round(lerp((pa >> s) & 255, (pb >> s) & 255, t));
+  return '#' + ((1 << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).slice(1);
+}
+const lighten = (c, t) => mix(c, '#FFFFFF', t);
+const darken = (c, t) => mix(c, '#000000', t);
+function rgba(hex, a) { const p = parseInt(hex.slice(1), 16); return `rgba(${(p >> 16) & 255},${(p >> 8) & 255},${p & 255},${a})`; }
+
+// Set a font that fits `text` into maxW, starting from maxSize.
+function fitFont(g, text, maxW, maxSize, weight = 800, style = '') {
+  let size = maxSize;
+  g.font = `${style} ${weight} ${size}px ${GO}`;
+  const w = g.measureText(text).width;
+  if (w > maxW) {
+    size = Math.max(5, size * maxW / w);
+    g.font = `${style} ${weight} ${size}px ${GO}`;
+  }
+  return size;
+}
+
+function roundRect(g, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+
+// Catch-screen lettering: dark outline, white rim, then the fill.
+function catchText(g, text, x, y, fill, ow = 7) {
+  g.lineJoin = 'round';
+  g.lineWidth = ow + 4; g.strokeStyle = 'rgba(30,10,40,0.45)'; g.strokeText(text, x + 1.5, y + 3);
+  g.lineWidth = ow + 3; g.strokeStyle = INK; g.strokeText(text, x, y);
+  g.lineWidth = ow - 1; g.strokeStyle = '#FFFFFF'; g.strokeText(text, x, y);
+  g.fillStyle = fill; g.fillText(text, x, y);
+}
+
+function seeded(seed) {
+  let s = seed;
+  return () => (s = (s * 16807) % 2147483647) / 2147483647;
+}
+
+/* =====================================================================
+   SOUND (Web Audio, synthesized: an encounter groove, throws, wobbles)
+   ===================================================================== */
+
+// Funky encounter loop in E minor: bass roots and stab chords
+const GROOVE = [
+  [82.41, [329.63, 392.00, 493.88]], [82.41, [329.63, 392.00, 493.88]],
+  [65.41, [329.63, 392.00, 523.25]], [73.42, [369.99, 440.00, 587.33]],
+];
+const SIXTEENTH = 60 / 124 / 4;
+const CHIME = [1318.5, 1568, 1760, 2093, 2349.3, 2637];
+
+const Sound = {
+  ctx: null, out: null, comp: null, speaker: null, recDest: null, noise: null,
+  muted: false, last: {}, musicNext: 0, musicStep: 0,
+
+  // Called on page load (starts immediately where the browser allows autoplay)
+  // and again on every interaction, so audio starts the moment it's permitted.
+  // Graph: sounds → out → compressor → speaker (mute switch) → speakers
+  //                                  ↘ recDest (video recording, ignores mute)
+  unlock() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      this.ctx = new AC();
+      this.comp = this.ctx.createDynamicsCompressor();
+      this.out = this.ctx.createGain();
+      this.out.gain.value = 1.3;
+      this.speaker = this.ctx.createGain();
+      this.speaker.gain.value = this.muted ? 0 : 1;
+      this.out.connect(this.comp);
+      this.comp.connect(this.speaker);
+      this.speaker.connect(this.ctx.destination);
+      const len = this.ctx.sampleRate;
+      this.noise = this.ctx.createBuffer(1, len, len);
+      const d = this.noise.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    // 'suspended' = blocked by autoplay rules; 'interrupted' = iOS paused it (e.g. a call)
+    if (this.ctx.state !== 'running' && this.ctx.state !== 'closed') this.ctx.resume().catch(() => {});
+  },
+
+  // Audio stream for the video recorder (sound is recorded even when muted).
+  recordStream() {
+    if (!this.ctx || !this.ctx.createMediaStreamDestination) return null;
+    if (!this.recDest) {
+      this.recDest = this.ctx.createMediaStreamDestination();
+      this.comp.connect(this.recDest);
+    }
+    return this.recDest.stream;
+  },
+
+  get running() { return !!this.ctx && this.ctx.state === 'running'; },
+
+  setMuted(m) {
+    this.muted = m;
+    if (this.speaker) this.speaker.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.02);
+  },
+
+  get ready() { return this.running && (!this.muted || Recorder.on); },
+
+  // Rate limit: true if this sound played less than `gap` seconds ago.
+  busy(key, gap) {
+    const now = this.ctx.currentTime;
+    if (now - (this.last[key] || 0) < gap) return true;
+    this.last[key] = now;
+    return false;
+  },
+
+  note(freq, when, dur, type = 'sine', vol = 0.2, freqTo = 0) {
+    const c = this.ctx, t = c.currentTime + when;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t);
+    if (freqTo) o.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.out);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+
+  // Filtered noise. attack > 0 fades in, otherwise it hits instantly.
+  burst(dur, freq, q, vol, freqTo = 0, when = 0, attack = 0, type = 'bandpass') {
+    const c = this.ctx, t = c.currentTime + when;
+    const src = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    src.buffer = this.noise;
+    src.loop = dur > 0.9;
+    f.type = type;
+    f.frequency.setValueAtTime(freq, t);
+    if (freqTo) f.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    f.Q.value = q;
+    if (attack > 0) {
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + attack);
+    } else {
+      g.gain.setValueAtTime(vol, t);
+    }
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(this.out);
+    src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.05);
+  },
+
+  // Plucky synth: sawtooth through a closing low-pass filter.
+  synth(freq, when = 0, vol = 0.05, dur = 0.18, bright = 2600) {
+    const c = this.ctx, t = c.currentTime + when;
+    const o = c.createOscillator(), f = c.createBiquadFilter(), g = c.createGain();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(freq, t);
+    f.type = 'lowpass';
+    f.Q.value = 4;
+    f.frequency.setValueAtTime(bright, t);
+    f.frequency.exponentialRampToValueAtTime(Math.max(150, freq * 1.2), t + dur * 0.9);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(f); f.connect(g); g.connect(this.out);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+
+  // Background: a bouncy "wild Pokémon appeared" groove (octave bass, offbeat
+  // stabs, claps on 2 and 4, hi-hats). Gets a little busier as the sun sets.
+  music() {
+    if (!this.ready) { this.musicNext = 0; return; }
+    const now = this.ctx.currentTime;
+    if (this.musicNext < now) this.musicNext = now + 0.05;
+    while (this.musicNext < now + 0.15) {
+      const k = this.musicStep++, bar = GROOVE[Math.floor(k / 16) % GROOVE.length], e = k % 16;
+      const when = this.musicNext - now;
+      if (e % 4 === 0) this.note(55, when, 0.16, 'sine', 0.35, 40);                                   // kick
+      if ([0, 3, 6, 8, 11, 14].includes(e)) this.synth(e % 2 ? bar[0] * 2 : bar[0], when, 0.09, 0.16, 900);
+      if (e === 4 || e === 12) this.burst(0.12, 1600, 0.8, 0.12, 0, when);                            // clap
+      if (e % 2 === 1) this.burst(0.03, 8500, 1, 0.025, 0, when, 0, 'highpass');                      // hat
+      if (e === 2 || e === 10) bar[1].forEach(f => this.synth(f, when, 0.018, 0.14, 3200));           // stab
+      this.musicNext += SIXTEENTH;
+    }
+  },
+
+  throwBall() {
+    if (!this.ready || this.busy('throw', 0.06)) return;
+    this.burst(0.22, 700, 1.2, 0.07, 2600);
+  },
+  tock(strength) {
+    if (!this.ready || this.busy('tock', 0.05)) return;
+    this.note(rand(700, 900), 0, 0.05, 'triangle', 0.04 + 0.06 * strength);
+    this.burst(0.03, 3000, 3, 0.05 * strength);
+  },
+  // The Poké Ball opens and pulls the Pokémon in.
+  capture() {
+    if (!this.ready) return;
+    this.note(1400, 0, 0.35, 'sine', 0.12, 300);
+    this.burst(0.35, 2500, 1, 0.12, 500);
+    this.note(180, 0.25, 0.1, 'square', 0.06);
+  },
+  // Each wobble: a little click-clack.
+  wobble(k) {
+    if (!this.ready) return;
+    this.burst(0.03, 2200, 4, 0.22);
+    this.burst(0.03, 1800, 4, 0.18, 0, 0.12);
+    this.note(120 + k * 15, 0, 0.12, 'triangle', 0.12);
+  },
+  gotcha() {
+    if (!this.ready) return;
+    this.burst(0.04, 3000, 3, 0.25);
+    [1046.5, 1318.5, 1568, 2093].forEach((f, i) => this.note(f, 0.08 + i * 0.07, 0.4, 'triangle', 0.08));
+    CHIME.forEach((f, i) => this.note(f, 0.4 + i * 0.03, 0.4, 'sine', 0.025));
+  },
+  breakFree() {
+    if (!this.ready) return;
+    this.burst(0.18, 1200, 1, 0.3, 300);
+    this.note(300, 0, 0.25, 'square', 0.06, 900);
+  },
+  ability(kind) {
+    if (!this.ready) return;
+    switch (kind) {
+      case 'dash': this.burst(0.2, 3500, 2, 0.2, 900); this.note(1800, 0, 0.12, 'square', 0.03, 2600); break;
+      case 'vine': this.burst(0.08, 2500, 5, 0.35, 5000); break;                                   // whip crack
+      case 'ember': this.burst(0.5, 900, 0.6, 0.3, 200, 0, 0.03, 'lowpass'); break;
+      case 'water': this.burst(0.45, 3200, 0.8, 0.22, 1200); break;
+      case 'dig': this.burst(0.6, 180, 0.7, 0.35, 90, 0, 0.05, 'lowpass'); break;
+      case 'puff': this.note(300, 0, 0.4, 'sine', 0.12, 700); break;
+      case 'rest': this.note(110, 0, 0.3, 'sine', 0.3, 160); this.burst(0.1, 400, 1, 0.2); break;     // belly boing
+      case 'phase': this.note(220, 0, 0.6, 'sine', 0.08, 110); this.note(330, 0, 0.6, 'triangle', 0.04, 160); break;
+      case 'splash': this.burst(0.25, 1500, 0.8, 0.22, 600); this.note(500, 0.05, 0.12, 'sine', 0.06, 300); break;
+      case 'teleport': [880, 1320, 1760, 2640].forEach((f, i) => this.note(f, i * 0.03, 0.25, 'sine', 0.05)); break;
+      case 'transform': this.note(400, 0, 0.3, 'sine', 0.1, 1200); this.note(600, 0, 0.3, 'triangle', 0.05, 1800); break;
+      case 'barrier': this.note(660, 0, 0.5, 'sine', 0.1, 330); this.burst(0.4, 1800, 2, 0.15, 600); break;
+    }
+  },
+  // Event fanfare: two bright chords.
+  event() {
+    if (!this.ready) return;
+    [[523.25, 659.25, 783.99], [587.33, 739.99, 880]].forEach((ch, i) => ch.forEach(f => this.synth(f, i * 0.14, 0.04, 0.35, 4000)));
+    this.burst(0.4, 5000, 0.7, 0.07, 2000);
+  },
+  master() {
+    if (!this.ready) return;
+    this.burst(1.5, 300, 1, 0.2, 3000, 0, 1.2);
+    [220, 277.18, 329.63, 440].forEach((f, i) => this.note(f, i * 0.25, 0.6, 'sawtooth', 0.03));
+  },
+  rocket() {
+    if (!this.ready) return;
+    [[293.66, 0], [277.18, 0.18], [261.63, 0.36], [207.65, 0.54]].forEach(([f, w]) => this.note(f, w, 0.22, 'square', 0.05));
+  },
+  suck() {
+    if (!this.ready || this.busy('suck', 0.1)) return;
+    this.note(300, 0, 0.25, 'sine', 0.08, 1400);
+  },
+  wind() {
+    if (!this.ready) return;
+    this.burst(7, 500, 0.6, 0.12, 900, 0, 1);
+  },
+  berry() {
+    if (!this.ready || this.busy('berry', 0.1)) return;
+    this.note(880, 0, 0.1, 'sine', 0.07, 1200);
+    this.note(1320, 0.08, 0.14, 'sine', 0.06);
+  },
+  firework() {
+    if (!this.ready) return;
+    this.note(rand(140, 200), 0, 0.3, 'sine', 0.25, 60);
+    this.burst(0.5, 3000, 0.7, 0.14, 1200);
+    for (let i = 0; i < 5; i++) this.burst(0.03, 5000, 2, 0.06, 0, 0.15 + i * rand(0.04, 0.08));   // crackle
+  },
+  tick() {
+    if (!this.ready) return;
+    this.note(1250, 0, 0.06, 'triangle', 0.15);
+    this.burst(0.04, 2400, 6, 0.2);
+  },
+  win() {
+    if (!this.ready) return;
+    [659.25, 783.99, 987.77, 1318.5].forEach((f, i) => this.synth(f, i * 0.1, 0.06, 0.3, 5000));
+    [329.63, 415.30, 493.88, 659.25, 830.61].forEach(f => {
+      this.note(f, 0.45, 2.4, 'sawtooth', 0.022);
+      this.note(f * 1.004, 0.45, 2.4, 'triangle', 0.03);
+    });
+    this.burst(1.2, 6000, 0.7, 0.1, 2500, 0.45);
+    this.note(82.4, 0, 1.2, 'sine', 0.5, 41);
+  },
+};
+
+/* =====================================================================
+   SIMULATION STATE
+   ===================================================================== */
+
+const S = {
+  mons: [], balls: [], berries: [], fx: [],
+  ballKind: 'poke', curveT: 0, windT: 0, windDir: 1, excellentT: 0, nightBoost: false,
+  rocket: null, master: null, rush: false, fireworkT: 0,
+  banner: null, flash: 0, shake: 0, winner: null, lastStand: false, endKind: null,
+  throwT: 1.2, throws: 0, aimed: 0, catches: 0, plan: [], lampsOn: 0,
+  clock: ROUND_SECONDS, lastTick: 0, timeUp: false,
+  time: 0, roundT: 0, acc: 0,
+};
+
+const freeMons = () => S.mons.filter(m => m.state === 'free');
+const pending = () => S.balls.filter(b => b.state === 'catch').length;
+
+function makeMon(def, idx) {
+  return { def, idx, x: 0, y: 0, vx: 0, vy: 0, r: def.r, state: 'free', grounded: false, face: 1,
+           targetX: 0, wanderT: 0, hopT: rand(0.5, 2), cool: rand(1, 3), sprintT: 0, sprintDir: 1,
+           invulnT: 0, phaseT: 0, digT: 0, digX: 0, puffT: 0, transT: 0, barrierT: 0, dashT: 0,
+           razzT: 0, golden: false, walk: rand(0, TAU), squash: 0, absorbT: 0, ball: null, caughtT: 0,
+           hoverX: 0, hoverY: 0, trail: [] };
+}
+
+// Fresh round: 12 Pokémon spread over the park, clock back to 2:00.
+function startRound() {
+  S.mons = POKEMON.map(makeMon);
+  const xs = shuffle(S.mons.slice());
+  xs.forEach((m, i) => {
+    m.x = AX0 + 30 + i * (AX1 - AX0 - 60) / (xs.length - 1);
+    m.y = m.def.fly ? rand(150, 260) : GROUND - m.r - rand(60, 140);
+    m.targetX = m.x; m.face = Math.random() < 0.5 ? -1 : 1;
+    m.hoverX = m.x; m.hoverY = m.y;
+  });
+  const snorlax = S.mons.find(m => m.def.id === 'snorlax');   // too sleepy to move: always on the lawn
+  const swap = xs.find(m => Math.abs(m.x - 305) < 22);
+  if (swap && swap !== snorlax) swap.x = snorlax.x;
+  snorlax.x = 305; snorlax.y = GROUND - snorlax.r - 2;
+  S.balls = []; S.berries = []; S.fx = [];
+  S.ballKind = 'poke'; S.curveT = 0; S.windT = 0; S.excellentT = 0; S.nightBoost = false;
+  S.rocket = null; S.master = null; S.rush = false; S.fireworkT = 0.4;
+  S.banner = null; S.flash = 0; S.shake = 0; S.winner = null; S.lastStand = false; S.endKind = null;
+  S.throwT = 1.6; S.throws = 0; S.aimed = 0; S.catches = 0; S.lampsOn = 0;
+  S.clock = Number(params.get('seconds')) || ROUND_SECONDS;   // ?seconds=10 for quick tests
+  S.lastTick = 0;
+  S.timeUp = false;
+  S.roundT = 0;
+  S.acc = 0;
+  // Something new about every 10 seconds. Ball upgrades, nightfall and the
+  // Master Ball stay put; the others are shuffled between rounds.
+  const mid = shuffle(['razz', 'curve', 'rocket', 'wind', 'excellent', 'golden']);
+  S.plan = [
+    [0.4, 'intro'], [9, 'great'], [19, mid[0]], [29, mid[1]], [39, 'ultra'], [49, mid[2]],
+    [59, mid[3]], [69, mid[4]], [78, 'night'], [88, mid[5]], [98, 'master'],
+  ];
+}
+
+/* =====================================================================
+   PHYSICS: Pokémon walk, hop and fly; balls arc down from the sky
+   ===================================================================== */
+
+const STEP = 1 / 240;   // fixed physics step (4 substeps per 60fps frame)
+
+// Static colliders: walls, the ground, the bench, the playground deck, the rock.
+const SEGS = [
+  [AX0, -600, AX0, GROUND + 30], [AX1, -600, AX1, GROUND + 30],
+  [AX0 - 30, GROUND, AX1 + 30, GROUND],
+  ...PLATFORMS.map(p => [p.x1, p.y, p.x2, p.y]),
+  [ROCK.x1, GROUND, (ROCK.x1 + ROCK.x2) / 2, ROCK.peak], [(ROCK.x1 + ROCK.x2) / 2, ROCK.peak, ROCK.x2, GROUND],
+];
+
+// Circle vs. a capsule segment. Returns the contact normal's y (or 2 = no contact).
+function collideSeg(o, s, e) {
+  const [x1, y1, x2, y2] = s;
+  const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy || 1e-9;
+  const t = clamp(((o.x - x1) * dx + (o.y - y1) * dy) / l2, 0, 1);
+  let nx = o.x - (x1 + dx * t), ny = o.y - (y1 + dy * t);
+  const rr = o.r + SEG_T / 2, d2 = nx * nx + ny * ny;
+  if (d2 >= rr * rr) return 2;
+  const d = Math.sqrt(d2);
+  if (d < 1e-6) { nx = 0; ny = -1; } else { nx /= d; ny /= d; }
+  o.x += nx * (rr - d);
+  o.y += ny * (rr - d);
+  const vn = o.vx * nx + o.vy * ny;
+  if (vn < 0) {
+    o.vx -= (1 + e) * vn * nx;
+    o.vy -= (1 + e) * vn * ny;
+    o.hit = Math.max(o.hit || 0, -vn);
+  }
+  return ny;
+}
+
+// Hidden (dug in), phased, transformed or teleporting Pokémon can't be caught.
+const catchable = m => m.state === 'free' && m.invulnT <= 0 && m.phaseT <= 0 && m.digT <= 0 && m.transT <= 0;
+
+function step(dt) {
+  const G = TUNING.gMon;
+  for (const m of S.mons) {
+    if (m.state === 'caught' || m.state === 'inball') continue;
+    if (m.state === 'absorb') continue;
+    m.invulnT -= dt; m.phaseT -= dt; m.puffT -= dt; m.transT -= dt; m.barrierT -= dt; m.dashT -= dt;
+    m.sprintT -= dt; m.razzT -= dt;
+    if (m.digT > 0) {                                       // tunnelling to a new spot
+      m.digT -= dt;
+      m.x += clamp(m.digX - m.x, -260 * dt, 260 * dt);
+      m.y = GROUND - m.r; m.vx = 0; m.vy = 0;
+      if (m.digT <= 0) { m.vy = -420; addDirt(m.x, GROUND); }
+      continue;
+    }
+    if (m.def.fly) {                                        // Mew floats around
+      const ax = (m.hoverX - m.x) * 3 - m.vx * 1.6, ay = (m.hoverY - m.y) * 3 - m.vy * 1.6;
+      m.vx += ax * dt; m.vy += ay * dt + Math.sin(S.time * 3 + m.idx) * 30 * dt;
+    } else {
+      const want = m.sprintT > 0 ? m.sprintDir * m.def.speed * 1.9 : m.def.speed ? Math.sign(m.targetX - m.x) * (Math.abs(m.targetX - m.x) > 6 ? m.def.speed : 0) : 0;
+      const k = m.grounded ? 10 : 2;
+      if (m.dashT <= 0) m.vx += (want - m.vx) * Math.min(1, k * dt);
+      m.vy += G * (m.puffT > 0 ? 0.32 : 1) * dt;
+      if (S.windT > 0 && !m.grounded) m.vx += S.windDir * 140 * dt;
+    }
+    m.x += m.vx * dt; m.y += m.vy * dt;
+    m.grounded = false;
+    if (!m.def.fly) {
+      for (const s of SEGS) {
+        const ny = collideSeg(m, s, 0.05);
+        if (ny < -0.5) m.grounded = true;
+      }
+    } else {
+      m.x = clamp(m.x, AX0 + m.r + 4, AX1 - m.r - 4);
+      m.y = clamp(m.y, 40, GROUND - m.r - 4);
+    }
+    if (Math.abs(m.vx) > 8) m.face = m.vx > 0 ? 1 : -1;
+  }
+
+  // Pokémon nudge each other apart
+  const live = S.mons.filter(m => m.state === 'free' && m.digT <= 0);
+  for (let i = 0; i < live.length; i++) {
+    const a = live[i];
+    for (let j = i + 1; j < live.length; j++) {
+      const b = live[j];
+      const dx = b.x - a.x, dy = b.y - a.y, rs = a.r + b.r - 4, d2 = dx * dx + dy * dy;
+      if (d2 >= rs * rs) continue;
+      const d = Math.sqrt(d2) || 0.01, nx = dx / d, ny = dy / d, push = (rs - d) / 2;
+      const wa = a.def.id === 'snorlax' ? 0.1 : 1, wb = b.def.id === 'snorlax' ? 0.1 : 1;
+      a.x -= nx * push * wa; a.y -= ny * push * wa; b.x += nx * push * wb; b.y += ny * push * wb;
+    }
+  }
+
+  // Balls
+  for (const b of S.balls) {
+    if (b.state === 'gone' || b.state === 'caught') continue;
+    b.age += dt; b.safeT -= dt;
+    if (b.kind === 'master' && b.state === 'fly') {        // homes in on its target
+      let t = b.target;
+      if (!t || t.state !== 'free') t = b.target = freeMons().sort((p, q) => Math.hypot(p.x - b.x, p.y - b.y) - Math.hypot(q.x - b.x, q.y - b.y))[0];
+      if (t && b.safeT <= 0) {
+        const dx = t.x - b.x, dy = t.y - b.y, d = Math.hypot(dx, dy) || 1;
+        b.vx += (dx / d * 520 - b.vx) * Math.min(1, 3.5 * dt);
+        b.vy += (dy / d * 520 - b.vy) * Math.min(1, 3.5 * dt);
+      } else b.vy += TUNING.gBall * 0.3 * dt;
+      if (b.age > 4.5) b.state = 'dead';
+    } else {
+      b.vy += TUNING.gBall * dt;
+      if (b.state === 'fly' && b.curve && b.target && b.target.state === 'free') {   // curveball: bends toward its target
+        b.vx += clamp((b.target.x - b.x) * 4 - b.vx * 0.4, -700, 700) * dt;
+      }
+      if (S.windT > 0 && b.state === 'fly') b.vx += S.windDir * 300 * dt;
+    }
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    b.rot += b.spin * dt;
+    b.hit = 0;
+    for (const s of SEGS) collideSeg(b, s, b.state === 'catch' ? 0.25 : 0.45);
+    if (b.hit > 60) {
+      if (b.state === 'fly') { b.state = 'roll'; b.rollT = 0; }
+      if (b.hit > 120) Sound.tock(Math.min(1, b.hit / 600));
+      b.vx *= 0.9;
+      if (b.state === 'catch') b.spin *= 0.5;
+    }
+    if (b.state === 'roll') {
+      b.rollT += dt;
+      b.spin = b.vx / b.r;
+      if (b.rollT > 0.8) b.state = 'dead';
+    }
+    if (b.state === 'dead') { b.fade = (b.fade || 0) + dt; if (b.fade > 0.5) b.state = 'gone'; }
+    if (b.y > GROUND + 60 || b.x < AX0 - 40 || b.x > AX1 + 40) b.state = 'gone';
+
+    // Team GO Rocket's balloon vacuums up balls flying near it
+    const R = S.rocket;
+    if (R && b.state === 'fly' && b.kind !== 'master') {
+      const dx = R.x - b.x, dy = R.y + 26 - b.y, d = Math.hypot(dx, dy);
+      if (d < 95) { b.vx += dx * 14 * dt; b.vy += dy * 14 * dt - TUNING.gBall * dt; if (d < 18) { b.state = 'gone'; R.stolen++; Sound.suck(); } }
+    }
+
+    // Ball hits a Pokémon
+    if ((b.state === 'fly' || b.state === 'roll') && b.safeT <= 0) {
+      for (const m of S.mons) {
+        if (m.state !== 'free' || m.digT > 0) continue;
+        const hr = m.r * (m.puffT > 0 ? 1.3 : 1) + b.r;
+        const dx = b.x - m.x, dy = b.y - m.y;
+        if (dx * dx + dy * dy >= hr * hr) continue;
+        if (!catchable(m)) { bounceOff(b, m, m.transT > 0 ? 'BOING!' : null); continue; }
+        if (m.def.ability === 'rest' && b.kind !== 'master' && Math.random() < TUNING.snorlaxBounce) {
+          bounceOff(b, m, 'THICK FAT!'); Sound.ability('rest'); continue;
+        }
+        if (freeMons().length === 1 && pending() > 0) { bounceOff(b, m, 'DODGED!'); continue; }   // never zero left
+        if (!b.target && b.kind !== 'master' && Math.random() > TUNING.strayCatch) { bounceOff(b, m, null); continue; }   // a glancing hit
+        capture(b, m);
+        break;
+      }
+    }
+  }
+
+  // Berries fall and sit on the ground until somebody eats them
+  for (const br of S.berries) {
+    if (br.eaten) continue;
+    br.vy += TUNING.gBall * dt; br.x += br.vx * dt; br.y += br.vy * dt;
+    br.hit = 0;
+    for (const s of SEGS) collideSeg(br, s, 0.3);
+    br.vx *= 0.995;
+    for (const m of S.mons) {
+      if (m.state !== 'free' || m.digT > 0) continue;
+      if ((m.x - br.x) ** 2 + (m.y - br.y) ** 2 < (m.r + br.r + 2) ** 2) { eatBerry(m, br); break; }
+    }
+  }
+}
+
+function bounceOff(b, m, text) {
+  const dx = b.x - m.x, dy = b.y - m.y, d = Math.hypot(dx, dy) || 1;
+  const sp = Math.max(260, Math.hypot(b.vx, b.vy) * 0.7);
+  b.vx = dx / d * sp; b.vy = Math.min(-200, dy / d * sp);
+  b.safeT = 0.35;
+  if (text) addFloat(m.x, m.y - m.r - 16, text, '#FFFFFF', 15, 0.8);
+}
+
+/* =====================================================================
+   CATCHING: hit → pulled into the ball → wobble, wobble, wobble → GOTCHA!
+   (or it breaks free at any wobble)
+   ===================================================================== */
+
+// The catch ring shrinks and grows while a ball is in the air; how small it is
+// at the moment of impact decides Nice / Great / Excellent.
+function ringSize(b) { return 0.25 + 0.75 * (0.5 + 0.5 * Math.cos(TAU * (b.age / 1.1 + b.ringPhase))); }
+
+/* Pacing: if catches are running ahead of schedule, Pokémon break free more
+   often (and less often when behind), so the last one is decided near 0:00. */
+function pace() {
+  const left = clamp((S.clock - TUNING.endMargin) / (ROUND_SECONDS - TUNING.endMargin), 0, 1);
+  const want = 1 + (S.mons.length - 1) * Math.pow(left, TUNING.paceCurve);   // free Pokémon the schedule expects
+  const ahead = want - (freeMons().length - 1);                              // after this catch
+  return clamp(1 - TUNING.paceK * ahead, 0.06, 1.5);
+}
+
+function capture(b, m) {
+  const q = S.excellentT > 0 || b.kind === 'master' ? 2 : ringSize(b) < 0.42 ? 2 : ringSize(b) < 0.72 ? 1 : 0;
+  const T = THROWS[q];
+  let p = m.def.rate * BALL_KINDS[b.kind].mult * T.mult * (b.curve ? 1.3 : 1) * (m.razzT > 0 ? (m.golden ? 2.5 : 1.6) : 1);
+  p = b.kind === 'master' ? 1 : clamp(p * pace(), 0.04, 0.94);
+  const per = Math.pow(p, 1 / 3);
+  b.state = 'catch'; b.mon = m; b.catchT = 0; b.wob = 0; b.checks = [0, 1, 2].map(() => Math.random() < per);
+  b.vx *= 0.15; b.vy = -260; b.spin = 0; b.rot = 0; b.p = p;
+  m.state = 'absorb'; m.absorbT = 0; m.ball = b; m.vx = 0; m.vy = 0;
+  addFloat(b.x, b.y - 34, T.text, T.color, q === 2 ? 22 : 19, 1.0);
+  if (b.curve) addFloat(b.x, b.y - 56, 'Curveball!', '#FF9AD2', 15, 1.0);
+  addSparks(b.x, b.y, 10, ['#FF4D4D', '#FFFFFF', '#FFB3B3'], 220);
+  Sound.capture();
+}
+
+function updateCatches(rdt) {
+  for (const b of S.balls) {
+    if (b.state === 'catch') {
+      b.catchT += rdt;
+      const m = b.mon;
+      if (m.state === 'absorb') {
+        m.absorbT += rdt;
+        m.x = lerp(m.x, b.x, 0.3); m.y = lerp(m.y, b.y, 0.3);
+        if (m.absorbT >= 0.35) m.state = 'inball';
+      }
+      const k = Math.floor((b.catchT - 0.95) / 0.75);        // wobbles at 0.95, 1.7, 2.45s
+      if (k >= 0 && k < 3 && k >= b.wob) {
+        b.wob = k + 1;
+        if (!b.checks[k]) { breakFree(b); continue; }
+        b.wobT = 0;
+        Sound.wobble(k);
+      }
+      if (b.wobT !== undefined) b.wobT += rdt;
+      if (b.catchT >= 3.05) gotcha(b);
+    } else if (b.state === 'caught') {
+      b.caughtT += rdt;
+      if (b.caughtT > 1.4) b.state = 'gone';
+    }
+  }
+  S.balls = S.balls.filter(b => b.state !== 'gone');
+}
+
+function breakFree(b) {
+  const m = b.mon;
+  b.state = 'gone';
+  m.state = 'free'; m.ball = null;
+  m.x = b.x; m.y = b.y - 4; m.vx = rand(-160, 160); m.vy = -380;
+  m.invulnT = TUNING.breakInvuln;
+  m.sprintT = 0.8; m.sprintDir = m.x < L.acx ? 1 : -1;
+  addSparks(b.x, b.y, 22, ['#FF4D4D', '#FFFFFF', '#FFD23F'], 340);
+  addRing(b.x, b.y, 4, 40, '#FFFFFF', 0.4, 5);
+  addFloat(b.x, b.y - 40, 'BROKE FREE!', '#FF6A6A', 20, 1.1);
+  S.shake = Math.max(S.shake, 4);
+  Sound.breakFree();
+}
+
+function gotcha(b) {
+  const m = b.mon;
+  b.state = 'caught'; b.caughtT = 0;
+  m.state = 'caught'; m.caughtT = 0;
+  addSparks(b.x, b.y - 8, 16, ['#FFD23F', '#FFFFFF', '#FFF2A8'], 260);
+  for (let i = 0; i < 3; i++) S.fx.push({ kind: 'star', x: b.x, y: b.y - 10, vx: (i - 1) * 70, vy: -170, life: 0.9, max: 0.9 });
+  addFloat(b.x, b.y - 44, 'GOTCHA!', '#FFD23F', 24, 1.3);
+  S.banner = { kind: 'caught', text: `${m.def.name.toUpperCase()} WAS CAUGHT!`, face: m.def, life: 1.6, max: 1.6 };
+  Sound.gotcha();
+  S.catches++;
+  checkLastStand();
+}
+
+function checkLastStand() {
+  const free = freeMons();
+  if (S.lastStand || free.length !== 1 || pending() > 0) return;
+  S.lastStand = true;
+  S.winner = free[0];
+  S.endKind = 'one';
+  S.banner = { kind: 'win', text: 'LAST ONE LEFT!', sub: S.winner.def.name, face: S.winner.def, life: 999, max: 999 };
+  S.flash = 0.3;
+  addConfetti(70);
+  Sound.win();
+}
+
+/* =====================================================================
+   THROWING: the throw rate adapts so the last catch lands just before 0:00
+   ===================================================================== */
+
+/* Two things: the "rain" (a steady, rising stream of throws, for the chaos) and
+   the share of them aimed at a Pokémon. The aimed share adapts so the last
+   catch lands just before 0:00; if that's behind schedule, it throws more. */
+function throwPlan() {
+  const free = freeMons().length;
+  if (S.lastStand || free <= 1) return null;
+  const need = free - 1 + 0.5 * pending();
+  const left = Math.max(1.5, S.clock - TUNING.endMargin);
+  const eff = (S.catches + 0.6) / (S.aimed + 6);      // catches per aimed throw so far (with a guess to start)
+  const aimedRate = need / left / eff;
+  const rain = (TUNING.minRate + S.roundT * TUNING.rampRate) * (S.rush ? 1.6 : 1) * Settings.throws;
+  const rate = clamp(Math.max(rain, aimedRate), 0.2, TUNING.maxRate);
+  return { rate, aimShare: clamp(aimedRate / rate, 0.04, 1) };
+}
+
+function throwBall(target, kind = S.ballKind) {
+  const T = rand(0.8, 1.2);
+  let px, py;
+  if (target) {
+    const err = (S.excellentT > 0 ? 7 : TUNING.aimErr) * gauss();
+    px = target.x + target.vx * T * rand(0.2, 0.8) + err;
+    py = target.y;
+  } else {                                     // a miss: lands where nobody is standing
+    let best = -1;
+    for (let k = 0; k < 8; k++) {
+      const x = rand(AX0 + 20, AX1 - 20);
+      const gap = Math.min(...freeMons().map(m => Math.abs(m.x - x)), 999);
+      if (gap > best) { best = gap; px = x; }
+    }
+    py = GROUND - 10;
+  }
+  const x0 = clamp(px + rand(-150, 150), AX0 + 14, AX1 - 14), y0 = -24;
+  const b = { kind, x: x0, y: y0, vx: (px - x0) / T, vy: (py - y0 - 0.5 * TUNING.gBall * T * T) / T, r: BALL_R,
+              state: 'fly', age: 0, rot: rand(0, TAU), spin: rand(9, 15) * (Math.random() < 0.5 ? -1 : 1),
+              target, ringPhase: Math.random(), curve: S.curveT > 0, seen: new Set(), safeT: 0, rollT: 0, hit: 0 };
+  S.balls.push(b);
+  S.throws++;
+  Sound.throwBall();
+  return b;
+}
+
+function scheduleThrows(rdt) {
+  const P = throwPlan();
+  if (!P) return;
+  S.throwT -= rdt;
+  if (S.throwT > 0) return;
+  S.throwT = (1 / P.rate) * rand(0.6, 1.4);
+  const free = freeMons().filter(m => m.digT <= 0);
+  if (free.length && Math.random() < P.aimShare) { S.aimed++; throwBall(pick(free)); }
+  else throwBall(null);
+}
+
+/* =====================================================================
+   POKÉMON BRAINS: wander, hop, and react to balls coming at them
+   ===================================================================== */
+
+function think(m, rdt) {
+  if (m.state !== 'free') return;
+  m.cool -= rdt * Settings.moves;
+  m.wanderT -= rdt;
+  if (m.def.fly) {
+    if (m.wanderT <= 0) { m.wanderT = rand(1, 2.4); m.hoverX = rand(AX0 + 40, AX1 - 40); m.hoverY = rand(60, 300); }
+  } else if (m.def.id === 'magikarp') {                    // flops around, as Magikarp does
+    if (m.grounded && (m.hopT -= rdt) <= 0) {
+      m.hopT = rand(0.5, 1.3); m.vy = -rand(220, 420); m.vx = rand(-140, 140); m.squash = 0.6;
+    }
+  } else if (m.def.speed > 0) {
+    if (m.wanderT <= 0) { m.wanderT = rand(1.2, 3.5); m.targetX = rand(AX0 + 30, AX1 - 30); }
+    if (m.grounded && (m.hopT -= rdt) <= 0) {              // idle hops (sometimes up onto the bench or deck)
+      m.hopT = rand(1.2, 3.5);
+      if (Math.random() < 0.6) m.vy = -m.def.jump * rand(0.7, 1);
+    }
+  }
+  // berries attract hungry Pokémon
+  const br = S.berries.find(b => !b.eaten && Math.abs(b.x - m.x) < 170);
+  if (br && !m.def.fly) m.targetX = br.x;
+  if (br && m.def.fly) { m.hoverX = br.x; m.hoverY = br.y - 10; }
+
+  // threats: will a ball reach me in the next 0.6s?
+  if (m.def.alert <= 0) return;
+  for (const b of S.balls) {
+    if ((b.state !== 'fly' && b.state !== 'roll') || b.seen.has(m)) continue;
+    let hitT = -1;
+    for (let t = 0.04; t <= 0.6; t += 0.04) {
+      const bx = b.x + b.vx * t, by = b.y + b.vy * t + 0.5 * TUNING.gBall * t * t;
+      const mx = m.x + m.vx * t * 0.5, my = m.y;
+      if ((bx - mx) ** 2 + (by - my) ** 2 < (m.r + b.r + 5) ** 2) { hitT = t; break; }
+    }
+    if (hitT < 0) continue;
+    b.seen.add(m);
+    const alert = m.def.alert + (m.def.id === 'gengar' && S.nightBoost ? 0.25 : 0);
+    if (Math.random() > alert) continue;
+    react(m, b, hitT);
+  }
+}
+
+function react(m, b, hitT) {
+  if (m.cool <= 0 && Settings.moves > 0 && Math.random() < TUNING.abilityChance) { useAbility(m, b); return; }
+  if (m.def.fly) { m.hoverX = clamp(m.x + (m.x > b.x ? 1 : -1) * rand(80, 160), AX0 + 40, AX1 - 40); m.wanderT = 1; return; }
+  if (m.def.speed <= 0 && m.def.id !== 'magikarp') return;
+  const bx = b.x + b.vx * hitT;
+  m.sprintDir = m.x >= bx ? 1 : -1;
+  if (m.x < AX0 + 40) m.sprintDir = 1;
+  if (m.x > AX1 - 40) m.sprintDir = -1;
+  m.sprintT = 0.55;
+  if (m.grounded && m.def.jump > 0 && Math.random() < 0.45) { m.vy = -m.def.jump; m.vx = m.sprintDir * m.def.speed * 1.5; }
+}
+
+function useAbility(m, b, kind = m.def.ability) {
+  m.cool = rand(3.5, 6.5);
+  addFloat(m.x, m.y - m.r - 18, m.def.move, m.def.color, 16, 1.0);
+  Sound.ability(kind);
+  const away = b ? (m.x >= b.x ? 1 : -1) : (Math.random() < 0.5 ? 1 : -1);
+  switch (kind) {
+    case 'dash':
+      m.dashT = 0.28; m.vx = (m.x < AX0 + 60 ? 1 : m.x > AX1 - 60 ? -1 : away) * 560; m.invulnT = 0.15;
+      break;
+    case 'vine': case 'water':
+      if (b) {
+        S.fx.push({ kind, x1: m.x, y1: m.y, x2: b.x, y2: b.y, life: 0.3, max: 0.3 });
+        b.vx = (b.x >= m.x ? 1 : -1) * rand(kind === 'water' ? 420 : 280, kind === 'water' ? 560 : 400);
+        b.vy = -rand(300, 460); b.safeT = 0.7; b.state = 'fly'; b.curve = false;
+      }
+      break;
+    case 'ember':
+      if (b) {
+        S.fx.push({ kind: 'ember', x1: m.x, y1: m.y, x2: b.x, y2: b.y, life: 0.35, max: 0.35 });
+        b.state = 'gone';
+        addSparks(b.x, b.y, 18, ['#FF8A1F', '#FFD34A', '#FF4D1F', '#3A3A3A'], 300);
+      }
+      break;
+    case 'dig':
+      m.digT = 1.0; m.digX = clamp(m.x + away * rand(110, 200), AX0 + 30, AX1 - 30);
+      addDirt(m.x, GROUND);
+      break;
+    case 'puff':
+      m.puffT = 1.6; m.vy = -620; m.vx = away * 90;
+      break;
+    case 'phase':
+      m.phaseT = 1.4;
+      break;
+    case 'splash':
+      m.vy = -560; m.vx = away * rand(60, 200); m.squash = 0.8;
+      addFloat(m.x, m.y - m.r - 38, 'But nothing happened!', '#FFFFFF', 12, 1.1);
+      break;
+    case 'teleport': {
+      const nx = rand(AX0 + 30, AX1 - 30);
+      addSparks(m.x, m.y, 14, ['#FFE38A', '#FFFFFF', '#C9A3FF'], 200);
+      addRing(m.x, m.y, 4, 30, '#C9A3FF', 0.35, 4);
+      m.x = nx; m.y = GROUND - m.r - 120; m.vx = 0; m.vy = 0; m.invulnT = 0.35;
+      addSparks(m.x, m.y, 14, ['#FFE38A', '#FFFFFF', '#C9A3FF'], 200);
+      break;
+    }
+    case 'transform':
+      m.transT = 1.6;
+      addSparks(m.x, m.y, 12, ['#D9B8F5', '#FFFFFF'], 180);
+      break;
+    case 'barrier':
+      m.barrierT = 0.5;
+      addRing(m.x, m.y, m.r, 105, '#FF9AD2', 0.5, 7);
+      for (const o of S.balls) {
+        if ((o.state !== 'fly' && o.state !== 'roll') || o.kind === 'master') continue;
+        const dx = o.x - m.x, dy = o.y - m.y, d = Math.hypot(dx, dy) || 1;
+        if (d > 105) continue;
+        o.vx = dx / d * 460; o.vy = dy / d * 460 - 120; o.safeT = 0.6; o.state = 'fly'; o.curve = false;
+      }
+      break;
+  }
+}
+
+function eatBerry(m, br) {
+  br.eaten = true;
+  m.razzT = br.golden ? 12 : 9;
+  m.golden = br.golden;
+  addFloat(m.x, m.y - m.r - 18, br.golden ? 'GOLDEN RAZZ!' : 'Razz Berry!', br.golden ? '#FFD23F' : '#FF5A7A', 15, 1.0);
+  addSparks(br.x, br.y, 10, br.golden ? ['#FFD23F', '#FFFFFF'] : ['#FF5A7A', '#FFFFFF'], 160);
+  Sound.berry();
+}
+
+/* =====================================================================
+   EVENTS: something new about every 10 seconds
+   ===================================================================== */
+
+function showBanner(text, sub, color, life = 2.2) {
+  S.banner = { kind: 'event', text, sub, color, life, max: life };
+  Sound.event();
+}
+
+function runEvent(kind) {
+  if (S.lastStand) return;
+  switch (kind) {
+    case 'intro': showBanner('WILD POKÉMON APPEARED!', '12 Pokémon in the park · only one gets away', '#FF8A3D', 2.4); break;
+    case 'great': S.ballKind = 'great'; showBanner('GREAT BALLS!', 'Catch rate ×1.5', '#2F7BF5'); break;
+    case 'ultra': S.ballKind = 'ultra'; showBanner('ULTRA BALLS!', 'Catch rate ×2', '#FFD23F'); break;
+    case 'razz': dropBerries(4, false); showBanner('RAZZ BERRIES!', 'Whoever eats one is easier to catch', '#FF5A7A'); break;
+    case 'golden': dropBerries(1, true); showBanner('GOLDEN RAZZ BERRY!', "Don't eat it!", '#FFD23F'); break;
+    case 'curve': S.curveT = 10; showBanner('CURVEBALLS!', 'They bend toward their target', '#FF9AD2'); break;
+    case 'wind': S.windT = 8; S.windDir = Math.random() < 0.5 ? -1 : 1; showBanner('WINDY!', 'Throws get blown off course', '#9FE3FF'); Sound.wind(); break;
+    case 'excellent': S.excellentT = 8; showBanner('EXCELLENT THROWS!', 'Perfect aim for 8 seconds', '#FFD23F'); break;
+    case 'night':
+      S.nightBoost = true; S.lampsOn = 0.01;
+      showBanner('NIGHT FALLS!', 'Ghost Pokémon get stronger', '#8E6BD0');
+      break;
+    case 'rocket': {
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      S.rocket = { t: 0, dur: 7, dir, x: dir > 0 ? AX0 - 70 : AX1 + 70, y: 92, stolen: 0 };
+      showBanner('TEAM GO ROCKET!', "They're stealing the Poké Balls!", '#E23B3B');
+      Sound.rocket();
+      break;
+    }
+    case 'master': {
+      const free = freeMons();
+      if (free.length < 3) { S.rush = true; showBanner('FINAL THROWS!', 'Balls everywhere!', '#FF6A3D'); break; }
+      const target = pick(free.filter(m => m.def.id !== 'snorlax')) || pick(free);
+      S.master = { t: 0, target, launched: false };
+      showBanner('MASTER BALL!', `Locked on ${target.def.name}…`, '#B06BEA', 2.4);
+      Sound.master();
+      break;
+    }
+  }
+}
+
+function dropBerries(n, golden) {
+  for (let i = 0; i < n; i++) {
+    S.berries.push({ x: rand(AX0 + 40, AX1 - 40), y: -20 - i * 30, vx: rand(-40, 40), vy: rand(0, 80), r: golden ? 8 : 7, golden, eaten: false, age: 0, hit: 0 });
+  }
+}
+
+function updateEvents(rdt) {
+  while (S.plan.length && S.roundT >= S.plan[0][0]) runEvent(S.plan.shift()[1]);
+  if (!S.rush && S.clock <= 12 && !S.lastStand) { S.rush = true; showBanner('FINAL THROWS!', 'Balls everywhere!', '#FF6A3D'); }
+  S.curveT -= rdt; S.windT -= rdt; S.excellentT -= rdt;
+  if (S.lampsOn > 0) S.lampsOn = Math.min(1, S.lampsOn + rdt * 1.5);
+  if (S.windT > 0 && Math.random() < rdt * 14) {
+    S.fx.push({ kind: 'leaf', x: S.windDir > 0 ? AX0 : AX1, y: rand(40, GROUND - 40), vx: S.windDir * rand(260, 420), vy: rand(-30, 40),
+                a: rand(0, TAU), spin: rand(-6, 6), life: 1.6, max: 1.6, color: pick(['#E8A33D', '#C9672E', '#8DBE4A']) });
+  }
+  for (const br of S.berries) br.age += rdt;
+  S.berries = S.berries.filter(br => !br.eaten && br.age < 14);
+
+  const R = S.rocket;
+  if (R) {
+    R.t += rdt;
+    R.x += R.dir * (AX1 - AX0 + 140) / R.dur * rdt;
+    if (R.t >= R.dur) {
+      if (R.stolen) addFloat(L.acx, 80, `Team Rocket stole ${R.stolen} Poké Balls!`, '#E23B3B', 15, 1.4);
+      S.rocket = null;
+    }
+  }
+  const M = S.master;
+  if (M) {
+    M.t += rdt;
+    if (!M.launched && M.t > 1.3) {
+      M.launched = true;
+      if (M.target.state === 'free') {
+        const b = throwBall(M.target, 'master');
+        b.x = L.acx; b.y = -30; b.vx = 0; b.vy = 200; b.curve = false;
+        M.ball = b;
+      }
+    }
+    if (M.launched && (!M.ball || M.ball.state !== 'fly')) S.master = null;
+    if (M.t > 7) S.master = null;
+  }
+}
+
+/* =====================================================================
+   EFFECTS
+   ===================================================================== */
+
+function addRing(x, y, r0, r1, color, life, width) {
+  S.fx.push({ kind: 'ring', x, y, r0, r1, color, life, max: life, width });
+}
+function addSparks(x, y, count, colors, speed) {
+  for (let i = 0; i < count; i++) {
+    const a = rand(0, TAU), s = rand(speed * 0.3, speed), life = rand(0.4, 0.9);
+    S.fx.push({ kind: 'spark', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                color: pick(colors), size: rand(1.8, 3.6), life, max: life });
+  }
+}
+function addDirt(x, y) {
+  for (let i = 0; i < 12; i++) {
+    const a = rand(-Math.PI * 0.9, -Math.PI * 0.1), s = rand(80, 240), life = rand(0.4, 0.7);
+    S.fx.push({ kind: 'spark', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, grav: 600,
+                color: pick(['#6B4A2E', '#8A6440', '#4E3420']), size: rand(2, 4), life, max: life });
+  }
+}
+// Fireworks over the park once the winner is decided.
+function firework() {
+  const x = rand(AX0 + 40, AX1 - 40), y = rand(10, 200);
+  const col = pick(['#FF6A88', '#FFD23F', '#6CC8FF', '#7CE38B', '#C9A3FF', '#FF9A3D']);
+  for (let i = 0; i < 26; i++) {
+    const a = i / 26 * TAU, sp = rand(140, 190), life = rand(0.8, 1.2);
+    S.fx.push({ kind: 'spark', x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, grav: 90,
+                color: Math.random() < 0.8 ? col : '#FFFFFF', size: rand(1.8, 2.8), life, max: life });
+  }
+  addRing(x, y, 4, 34, col, 0.4, 3);
+  Sound.firework();
+}
+
+function addConfetti(count) {
+  const colors = ['#FF6A88', '#FF9A3D', '#FFD23F', '#7CE38B', '#6CC8FF', '#C9A3FF', '#FFFFFF'];
+  for (let i = 0; i < count; i++) {
+    const life = rand(1.8, 3.2);
+    S.fx.push({ kind: 'confetti', x: rand(AX0, AX1), y: rand(-60, 40), vx: rand(-60, 60), vy: rand(40, 160),
+                spin: rand(-8, 8), a: rand(0, TAU), color: pick(colors), size: rand(4, 7), life, max: life });
+  }
+}
+// Floating text; stacks above any recent text at the same spot instead of overlapping it.
+function addFloat(x, y, text, color, size, life) {
+  for (let k = 0; k < 4; k++) {
+    const clash = S.fx.some(f => f.kind === 'float' && f.max - f.life < 0.6 && Math.abs(f.x - x) < 130 && Math.abs(f.y - y) < 20);
+    if (!clash) break;
+    y -= 22;
+  }
+  S.fx.push({ kind: 'float', x, y, text, color, size, life, max: life });
+}
+
+/* =====================================================================
+   UPDATE
+   ===================================================================== */
+
+function update(rdt) {
+  S.time += rdt;
+
+  // Real-time timers
+  S.flash = Math.max(0, S.flash - rdt * 2.2);
+  S.shake = Math.max(0, S.shake - rdt * 30);
+  if (S.banner && (S.banner.life -= rdt) <= 0) S.banner = null;
+
+  for (const f of S.fx) {
+    f.life -= rdt;
+    if (f.kind === 'spark' || f.kind === 'star') {
+      if (f.grav) f.vy += f.grav * rdt;
+      if (f.kind === 'star') f.vy += 420 * rdt;
+      f.x += f.vx * rdt; f.y += f.vy * rdt;
+      if (f.kind === 'spark') { f.vx *= 0.93; f.vy *= 0.93; }
+    } else if (f.kind === 'confetti') {
+      f.vy = Math.min(f.vy + 120 * rdt, 170);
+      f.x += (f.vx + Math.sin(S.time * 3 + f.spin) * 30) * rdt; f.y += f.vy * rdt;
+      f.a += f.spin * rdt;
+    } else if (f.kind === 'leaf') {
+      f.x += f.vx * rdt; f.y += (f.vy + Math.sin(S.time * 5 + f.spin) * 40) * rdt; f.a += f.spin * rdt;
+    }
+  }
+  S.fx = S.fx.filter(f => f.life > 0);
+
+  // Looks: squash relaxes, walk cycle, caught Pokémon fade from the strip
+  for (const m of S.mons) {
+    m.squash *= Math.exp(-rdt * 8);
+    if (m.state === 'free' && m.grounded && Math.abs(m.vx) > 10) m.walk += rdt * Math.abs(m.vx) * 0.12;
+    if (m.state === 'caught') m.caughtT += rdt;
+    if (m.dashT > 0) { m.trail.push([m.x, m.y]); if (m.trail.length > 6) m.trail.shift(); } else if (m.trail.length) m.trail.shift();
+  }
+
+  // Round clock (wall-clock time, so the video is exactly 2:00)
+  if (!S.timeUp) {
+    S.clock -= rdt;
+    const whole = Math.ceil(S.clock);
+    if (whole !== S.lastTick && whole <= 5 && whole > 0) Sound.tick();
+    S.lastTick = whole;
+    if (S.clock <= 0) endRound();
+    else Sound.music();
+  }
+  if (S.timeUp) { Recorder.tick(rdt); return; }   // frozen: nothing moves
+  S.roundT += rdt;
+
+  updateEvents(rdt);
+  scheduleThrows(rdt);
+  for (const m of S.mons) think(m, rdt);
+  if (S.lastStand && S.winner.grounded && Math.random() < rdt * 2.5 && !S.winner.def.fly) S.winner.vy = -380;   // happy hops
+  if (S.lastStand && (S.fireworkT -= rdt) <= 0) { S.fireworkT = rand(0.35, 0.8); firework(); }
+
+  S.acc += rdt;
+  let steps = 0;
+  while (S.acc >= STEP && steps < 12) { step(STEP); S.acc -= STEP; steps++; }
+  if (steps === 12) S.acc = 0;
+  updateCatches(rdt);
+  if (!S.lastStand) checkLastStand();
+}
+
+function endRound() {
+  S.clock = 0;
+  S.timeUp = true;
+  // Any Poké Ball still wobbling at 0:00 is settled right away: caught or broke free.
+  for (const b of S.balls) {
+    if (b.state !== 'catch') continue;
+    if (b.checks.slice(b.wob).every(Boolean)) {
+      b.state = 'caught'; b.caughtT = 0; b.mon.state = 'caught'; b.mon.caughtT = 1;
+      addFloat(b.x, b.y - 44, 'GOTCHA!', '#FFD23F', 24, 1.3);
+    } else {
+      breakFree(b);
+      b.mon.vx = 0; b.mon.vy = 0; b.mon.y = GROUND - b.mon.r - 2;
+    }
+  }
+  const free = freeMons();
+  if (!S.lastStand) {
+    if (free.length === 1) { S.winner = free[0]; S.endKind = 'one'; }
+    else { S.winner = null; S.endKind = 'many'; }
+  }
+  const faces = S.endKind === 'one' ? [S.winner.def] : free.map(m => m.def);
+  S.banner = { kind: 'final', faces, life: 999, max: 999, age: 0 };
+  S.flash = 0.35;
+  addConfetti(90);
+  if (S.lastStand) Sound.event(); else Sound.win();   // no second fanfare if it was just decided
+}
+
+/* =====================================================================
+   CHARACTERS: every Pokémon is drawn in code (no image files). Drawn in
+   "unit space": the body is a circle of radius 1 centered at (0, 0), looking
+   at the camera; line widths are in the same units.
+   ===================================================================== */
+
+function circ(g, x, y, r) { g.beginPath(); g.arc(x, y, Math.max(0, r), 0, TAU); }
+function ell(g, x, y, rx, ry, rot = 0) { g.beginPath(); g.ellipse(x, y, Math.max(0, rx), Math.max(0, ry), rot, 0, TAU); }
+function ink(g, fill, w = 0.07) {
+  g.fillStyle = fill;
+  g.fill();
+  g.lineWidth = w;
+  g.strokeStyle = INK;
+  g.stroke();
+}
+function seg(g, x1, y1, x2, y2, w, color = INK) {
+  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2);
+  g.lineWidth = w; g.lineCap = 'round'; g.strokeStyle = color; g.stroke();
+}
+function dot(g, x, y, r, color = INK) { circ(g, x, y, r); g.fillStyle = color; g.fill(); }
+function beady(g, x, y, r) { dot(g, x, y, r); dot(g, x - r * 0.35, y - r * 0.35, r * 0.38, '#FFFFFF'); }
+// Big cartoon eye: white, colored iris, pupil, glint.
+function bigEye(g, x, y, rx, ry, iris) {
+  ell(g, x, y, rx, ry); ink(g, '#FFFFFF', 0.05);
+  ell(g, x + rx * 0.12, y + ry * 0.18, rx * 0.68, ry * 0.72); g.fillStyle = iris; g.fill();
+  dot(g, x + rx * 0.12, y + ry * 0.25, rx * 0.36, '#111111');
+  dot(g, x - rx * 0.12, y - ry * 0.25, rx * 0.26, '#FFFFFF');
+}
+function ballBase(g, light, dark) {
+  const gr = g.createRadialGradient(-0.35, -0.42, 0.05, 0, 0, 1.05);
+  gr.addColorStop(0, light);
+  gr.addColorStop(1, dark);
+  circ(g, 0, 0, 1); g.fillStyle = gr; g.fill();
+}
+function inside(g, fn) { g.save(); circ(g, 0, 0, 0.995); g.clip(); fn(); g.restore(); }
+// Outline + warm sunset rim light from the left.
+function ballDone(g) {
+  const gr = g.createRadialGradient(-0.5, -0.45, 0, -0.5, -0.45, 0.7);
+  gr.addColorStop(0, 'rgba(255,240,200,0.42)');
+  gr.addColorStop(1, 'rgba(255,240,200,0)');
+  circ(g, 0, 0, 1); g.fillStyle = gr; g.fill();
+  circ(g, 0, 0, 1); g.lineWidth = 0.08; g.strokeStyle = INK; g.stroke();
+}
+function smile(g, x0, x1, y, depth, w = 0.08) {
+  g.beginPath(); g.moveTo(x0, y); g.quadraticCurveTo((x0 + x1) / 2, y + depth, x1, y);
+  g.lineWidth = w; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+}
+function openMouth(g, x0, x1, y, depth, color = '#C4473A') {
+  g.beginPath(); g.moveTo(x0, y); g.quadraticCurveTo((x0 + x1) / 2, y + depth, x1, y);
+  g.quadraticCurveTo((x0 + x1) / 2, y + depth * 0.3, x0, y); g.closePath(); ink(g, color, 0.05);
+}
+function flame(g, w, h, outer = '#FF7B1C', inner = '#FFD34A') {
+  const path = k => {
+    g.beginPath();
+    g.moveTo(0, h * 0.35 * k);
+    g.bezierCurveTo(-w * k, h * 0.25 * k, -w * 0.7 * k, -h * 0.35 * k, 0, -h * k);
+    g.bezierCurveTo(w * 0.15 * k, -h * 0.55 * k, w * k, -h * 0.25 * k, w * 0.75 * k, h * 0.1 * k);
+    g.quadraticCurveTo(w * 0.55 * k, h * 0.4 * k, 0, h * 0.35 * k);
+    g.closePath();
+  };
+  path(1); ink(g, outer, 0.06);
+  path(0.58); g.fillStyle = inner; g.fill();
+}
+
+const FACES = {
+  pikachu(g) {
+    for (const s of [-1, 1]) {
+      g.save(); g.translate(s * 0.48, -0.62); g.rotate(s * 0.5);
+      const ear = () => { g.beginPath(); g.moveTo(-0.22, 0.2); g.quadraticCurveTo(-0.2, -0.55, 0, -1.0); g.quadraticCurveTo(0.2, -0.55, 0.22, 0.2); g.closePath(); };
+      ear(); g.fillStyle = '#FFD83A'; g.fill();
+      g.save(); ear(); g.clip(); g.fillStyle = '#26221E'; g.fillRect(-0.4, -1.1, 0.8, 0.42); g.restore();
+      ear(); g.lineWidth = 0.07; g.strokeStyle = INK; g.stroke();
+      g.restore();
+    }
+    ballBase(g, '#FFF27E', '#F2BE18');
+    for (const s of [-1, 1]) { circ(g, s * 0.62, 0.24, 0.2); g.fillStyle = '#EE4235'; g.fill(); }
+    for (const s of [-1, 1]) beady(g, s * 0.34, -0.12, 0.13);
+    dot(g, 0, 0.1, 0.04);
+    g.beginPath(); g.moveTo(-0.18, 0.2); g.quadraticCurveTo(-0.09, 0.32, 0, 0.21); g.quadraticCurveTo(0.09, 0.32, 0.18, 0.2);
+    g.lineWidth = 0.05; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+    ballDone(g);
+  },
+  bulbasaur(g) {                                       // teal with a bulb on its back
+    g.save(); g.translate(0.08, -0.82);
+    ell(g, 0, 0, 0.66, 0.52); ink(g, '#5DBE6E');
+    g.strokeStyle = '#2E8B4A'; g.lineWidth = 0.05;
+    for (const a of [-0.32, 0, 0.32]) { g.beginPath(); g.moveTo(a * 1.4, 0.4); g.quadraticCurveTo(a * 1.6, -0.1, a * 0.4, -0.48); g.stroke(); }
+    g.restore();
+    for (const s of [-1, 1]) { g.beginPath(); g.moveTo(s * 0.45, -0.72); g.lineTo(s * 0.86, -0.86); g.lineTo(s * 0.78, -0.42); g.closePath(); ink(g, '#6CCFB2'); }
+    ballBase(g, '#A8EBD8', '#3FA58E');
+    inside(g, () => {
+      g.fillStyle = '#2F8A74';
+      for (const [x, y, r] of [[-0.62, -0.18, 0.16], [0.66, -0.3, 0.13], [0.55, 0.42, 0.12], [-0.4, 0.62, 0.1]]) { circ(g, x, y, r); g.fill(); }
+    });
+    for (const s of [-1, 1]) bigEye(g, s * 0.36, -0.04, 0.19, 0.22, '#C8303A');
+    openMouth(g, -0.34, 0.34, 0.34, 0.36, '#D9586A');
+    ballDone(g);
+  },
+  charmander(g) {
+    g.save(); g.translate(0.9, 0.48); g.rotate(0.35); flame(g, 0.32, 0.62); g.restore();
+    ballBase(g, '#FFCB8E', '#EA7A30');
+    inside(g, () => { ell(g, 0, 1.08, 0.8, 0.45); g.fillStyle = '#FBE6A2'; g.fill(); });
+    for (const s of [-1, 1]) bigEye(g, s * 0.34, -0.15, 0.18, 0.25, '#1F4E8C');
+    openMouth(g, -0.4, 0.4, 0.3, 0.44);
+    ballDone(g);
+  },
+  squirtle(g) {
+    ballBase(g, '#C3E9FA', '#4C9ED0');
+    inside(g, () => { ell(g, 0, 1.05, 1.0, 0.46); g.fillStyle = '#F6E7B4'; g.fill(); });
+    for (const s of [-1, 1]) bigEye(g, s * 0.37, -0.12, 0.22, 0.28, '#8A2E1E');
+    openMouth(g, -0.32, 0.32, 0.3, 0.42);
+    ballDone(g);
+  },
+  eevee(g) {                                           // big ears, fluffy cream collar
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.3, -0.72); g.quadraticCurveTo(s * 0.8, -1.55, s * 1.12, -1.3); g.quadraticCurveTo(s * 1.0, -0.7, s * 0.82, -0.4); g.closePath(); ink(g, '#B5733A');
+      g.beginPath(); g.moveTo(s * 0.45, -0.68); g.quadraticCurveTo(s * 0.82, -1.3, s * 1.0, -1.16); g.quadraticCurveTo(s * 0.92, -0.74, s * 0.78, -0.52); g.closePath(); g.fillStyle = '#6B3E1E'; g.fill();
+    }
+    ballBase(g, '#E2A766', '#9E6230');
+    inside(g, () => {
+      g.fillStyle = '#F6E3B8';
+      for (let x = -1.1; x <= 1.1; x += 0.28) { circ(g, x, 1.0 - Math.abs(x) * 0.15, 0.24); g.fill(); }
+    });
+    for (const s of [-1, 1]) bigEye(g, s * 0.36, -0.1, 0.2, 0.25, '#4A2A14');
+    dot(g, 0, 0.17, 0.045);
+    smile(g, -0.13, 0.13, 0.27, 0.1, 0.05);
+    ballDone(g);
+  },
+  jigglypuff(g) {                                      // pink balloon with a curl
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.4, -0.8); g.lineTo(s * 0.75, -1.12); g.lineTo(s * 0.86, -0.56); g.closePath(); ink(g, '#FFB0CE');
+      g.beginPath(); g.moveTo(s * 0.52, -0.78); g.lineTo(s * 0.72, -0.98); g.lineTo(s * 0.78, -0.66); g.closePath(); g.fillStyle = '#3A2030'; g.fill();
+    }
+    ballBase(g, '#FFD4E4', '#F07AA6');
+    g.beginPath(); g.moveTo(0.05, -1.0); g.bezierCurveTo(-0.55, -0.9, -0.3, -0.3, 0.06, -0.48); g.bezierCurveTo(0.28, -0.58, 0.12, -0.78, -0.02, -0.7);
+    g.lineWidth = 0.13; g.lineCap = 'round'; g.strokeStyle = '#E86A99'; g.stroke();
+    for (const s of [-1, 1]) bigEye(g, s * 0.38, 0.0, 0.25, 0.28, '#3FB7C9');
+    smile(g, -0.1, 0.1, 0.42, 0.08, 0.05);
+    ballDone(g);
+  },
+  snorlax(g) {
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.3, -0.82); g.lineTo(s * 0.6, -1.17); g.lineTo(s * 0.82, -0.6); g.closePath(); ink(g, '#2F5E6E');
+    }
+    ballBase(g, '#6A9FB1', '#2C5868');
+    inside(g, () => {
+      g.beginPath(); g.moveTo(-0.85, 1); g.bezierCurveTo(-0.95, -0.2, -0.45, -0.62, 0, -0.32);
+      g.bezierCurveTo(0.45, -0.62, 0.95, -0.2, 0.85, 1); g.closePath(); g.fillStyle = '#F2E3BE'; g.fill();
+    });
+    for (const s of [-1, 1]) seg(g, s * 0.15, -0.04, s * 0.5, -0.04, 0.07);
+    g.beginPath(); g.moveTo(-0.32, 0.34); g.quadraticCurveTo(0, 0.5, 0.32, 0.34); g.lineWidth = 0.06; g.strokeStyle = INK; g.stroke();
+    for (const s of [-1, 1]) { g.beginPath(); g.moveTo(s * 0.24, 0.39); g.lineTo(s * 0.18, 0.27); g.lineTo(s * 0.12, 0.41); g.closePath(); ink(g, '#FFFFFF', 0.03); }
+    ballDone(g);
+  },
+  gengar(g) {                                          // spiky purple ghost with a grin
+    g.beginPath();
+    const spikes = [[-1.0, -0.2], [-1.12, -0.55], [-0.86, -0.6], [-0.88, -1.0], [-0.55, -0.82], [-0.34, -1.18], [-0.12, -0.92],
+                    [0.12, -0.92], [0.34, -1.18], [0.55, -0.82], [0.88, -1.0], [0.86, -0.6], [1.12, -0.55], [1.0, -0.2]];
+    g.moveTo(-0.9, 0);
+    for (const [x, y] of spikes) g.lineTo(x, y);
+    g.lineTo(0.9, 0); g.closePath(); ink(g, '#7B58BE');
+    ballBase(g, '#B496E6', '#56388F');
+    for (const s of [-1, 1]) {
+      g.save(); g.translate(s * 0.36, -0.18); g.rotate(s * 0.35);
+      ell(g, 0, 0, 0.24, 0.15); ink(g, '#FF4D5E', 0.05);
+      dot(g, -s * 0.04, 0.02, 0.06, '#3A0A12');
+      g.restore();
+    }
+    g.beginPath(); g.moveTo(-0.6, 0.22); g.quadraticCurveTo(0, 0.82, 0.6, 0.22); g.quadraticCurveTo(0, 0.42, -0.6, 0.22); g.closePath(); ink(g, '#FFFFFF', 0.05);
+    g.beginPath(); g.moveTo(-0.5, 0.38); g.quadraticCurveTo(0, 0.56, 0.5, 0.38); g.lineWidth = 0.035; g.strokeStyle = INK; g.stroke();
+    ballDone(g);
+  },
+  magikarp(g) {                                        // orange carp, looking at us sideways
+    g.beginPath(); g.moveTo(-0.7, -0.68);                // crown fin
+    for (let i = 0; i < 6; i++) { g.lineTo(-0.55 + i * 0.22, -1.2 + (i % 2) * 0.12); g.lineTo(-0.44 + i * 0.22, -0.8); }
+    g.lineTo(0.75, -0.62); g.closePath(); ink(g, '#F6E3A0');
+    g.save(); g.translate(-1.0, 0.1);                   // tail
+    g.beginPath(); g.moveTo(0.2, 0); g.lineTo(-0.45, -0.55); g.lineTo(-0.3, 0); g.lineTo(-0.45, 0.55); g.closePath(); ink(g, '#F6E3A0');
+    g.restore();
+    ballBase(g, '#FFA77A', '#E0482A');
+    inside(g, () => {
+      g.strokeStyle = 'rgba(160,40,20,0.45)'; g.lineWidth = 0.05;
+      for (let y = -0.5; y <= 0.7; y += 0.3) for (let x = -0.8; x <= 0.3; x += 0.3) { g.beginPath(); g.arc(x + (y * 10 % 2 ? 0.15 : 0), y, 0.16, 0.2, Math.PI - 0.2); g.stroke(); }
+    });
+    circ(g, 0.38, -0.2, 0.26); ink(g, '#FFFFFF', 0.05);
+    dot(g, 0.4, -0.18, 0.08, '#111111');
+    ell(g, 0.82, 0.22, 0.18, 0.24); ink(g, '#F8E7C4', 0.05);
+    g.beginPath(); g.moveTo(0.7, 0.05); g.bezierCurveTo(0.95, -0.2, 1.3, 0.1, 1.15, 0.5); g.lineWidth = 0.06; g.strokeStyle = '#F6D36A'; g.stroke();
+    ballDone(g);
+  },
+  abra(g) {                                            // yellow psychic fox, always asleep
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.3, -0.78); g.lineTo(s * 0.85, -1.22); g.lineTo(s * 0.86, -0.42); g.closePath(); ink(g, '#E7B640');
+      g.beginPath(); g.moveTo(s * 0.48, -0.74); g.lineTo(s * 0.78, -1.0); g.lineTo(s * 0.78, -0.56); g.closePath(); g.fillStyle = '#8A5A1E'; g.fill();
+    }
+    ballBase(g, '#F7DA70', '#C9962A');
+    inside(g, () => { ell(g, 0, 0.42, 0.42, 0.3); g.fillStyle = '#F9E6A8'; g.fill(); });
+    for (const s of [-1, 1]) { g.beginPath(); g.moveTo(s * 0.18, -0.12); g.quadraticCurveTo(s * 0.36, -0.2, s * 0.55, -0.1); g.lineWidth = 0.07; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke(); }
+    dot(g, 0, 0.3, 0.045);
+    ballDone(g);
+  },
+  ditto(g) {                                           // a wobbly purple blob
+    g.beginPath();
+    g.moveTo(-1.0, 0.85);
+    g.bezierCurveTo(-1.2, 0.2, -0.9, -0.3, -0.6, -0.55);
+    g.bezierCurveTo(-0.45, -1.0, 0.1, -0.85, 0.2, -0.75);
+    g.bezierCurveTo(0.5, -0.95, 0.95, -0.7, 0.85, -0.25);
+    g.bezierCurveTo(1.15, 0.0, 1.15, 0.6, 1.0, 0.85);
+    g.closePath();
+    const gr = g.createRadialGradient(-0.3, -0.4, 0.1, 0, 0, 1.2);
+    gr.addColorStop(0, '#E4C8F7'); gr.addColorStop(1, '#9B6FCB');
+    g.fillStyle = gr; g.fill(); g.lineWidth = 0.08; g.strokeStyle = INK; g.stroke();
+    for (const s of [-1, 1]) dot(g, s * 0.24, -0.18, 0.07);
+    smile(g, -0.32, 0.32, 0.14, 0.1, 0.05);
+  },
+  dittoBall(g) {                                       // Ditto transformed into a Poké Ball
+    circ(g, 0, 0, 1); g.fillStyle = '#FFFFFF'; g.fill();
+    g.beginPath(); g.arc(0, 0, 1, Math.PI, TAU); g.closePath(); g.fillStyle = '#C08BE8'; g.fill();
+    seg(g, -1, 0, 1, 0, 0.14);
+    circ(g, 0, 0, 1); g.lineWidth = 0.1; g.strokeStyle = INK; g.stroke();
+    circ(g, 0, 0, 0.3); ink(g, '#FFFFFF', 0.1);
+    for (const s of [-1, 1]) dot(g, s * 0.3, 0.45, 0.07);
+    smile(g, -0.2, 0.2, 0.62, 0.08, 0.05);
+  },
+  mew(g) {                                             // pink, big blue eyes, long tail
+    g.beginPath(); g.moveTo(0.6, 0.6); g.bezierCurveTo(1.5, 1.0, 1.7, -0.2, 1.4, -0.8);
+    g.lineWidth = 0.14; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+    g.lineWidth = 0.08; g.strokeStyle = '#FFB3D4'; g.stroke();
+    ell(g, 1.42, -0.92, 0.16, 0.22, 0.4); ink(g, '#FFB3D4', 0.05);
+    for (const s of [-1, 1]) { g.beginPath(); g.moveTo(s * 0.35, -0.78); g.quadraticCurveTo(s * 0.75, -1.25, s * 0.86, -0.55); g.closePath(); ink(g, '#FFC4DD'); }
+    ballBase(g, '#FFE2EE', '#F39BC4');
+    for (const s of [-1, 1]) bigEye(g, s * 0.36, -0.06, 0.25, 0.32, '#3F8CE0');
+    smile(g, -0.12, 0.12, 0.42, 0.09, 0.05);
+    ballDone(g);
+  },
+};
+
+/* =====================================================================
+   RENDERING
+   ===================================================================== */
+
+const sprites = new Map();
+
+function getSprite(id, r, gray = false) {
+  const key = `${id}|${r}|${gray ? 1 : 0}`;
+  let s = sprites.get(key);
+  if (s) return s;
+  const size = r * 2 * 2.1;                       // room for ears, tails, bulbs and fins
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  if (gray) {
+    g.filter = 'grayscale(1) brightness(0.7)';
+    g.drawImage(getSprite(id, r).canvas, 0, 0);
+  } else {
+    g.scale(c.width / size, c.height / size);
+    g.translate(size / 2, size / 2);
+    g.scale(r, r);
+    g.lineJoin = 'round';
+    FACES[id](g);
+  }
+  s = { canvas: c, size };
+  sprites.set(key, s);
+  return s;
+}
+
+// Poké Balls by type (cached), drawn at radius r and rotated when drawn.
+function getBallSprite(kind, r) {
+  const key = `ball|${kind}|${r}`;
+  let s = sprites.get(key);
+  if (s) return s;
+  const size = r * 2 + 4;
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  g.scale(c.width / size, c.height / size);
+  g.translate(size / 2, size / 2);
+  g.scale(r, r);
+  const K = BALL_KINDS[kind];
+  circ(g, 0, 0, 1);
+  const wg = g.createLinearGradient(0, 0, 0, 1); wg.addColorStop(0, '#FFFFFF'); wg.addColorStop(1, '#D8D4DE');
+  g.fillStyle = wg; g.fill();
+  g.save(); g.beginPath(); g.arc(0, 0, 1, Math.PI, TAU); g.closePath(); g.clip();
+  const tg = g.createLinearGradient(0, -1, 0, 0); tg.addColorStop(0, lighten(K.top, 0.3)); tg.addColorStop(1, K.top);
+  g.fillStyle = tg; g.fillRect(-1, -1, 2, 1);
+  if (kind === 'great') { g.fillStyle = '#EE3B3B'; for (const s2 of [-1, 1]) { g.save(); g.translate(s2 * 0.5, -0.55); g.rotate(s2 * 0.5); g.fillRect(-0.13, -0.5, 0.26, 0.7); g.restore(); } }
+  if (kind === 'ultra') { g.fillStyle = '#FFD23F'; g.fillRect(-0.62, -1, 0.3, 0.75); g.fillRect(0.32, -1, 0.3, 0.75); g.fillRect(-0.62, -0.55, 1.24, 0.22); }
+  if (kind === 'master') {
+    g.fillStyle = '#F06BC8'; for (const s2 of [-1, 1]) { circ(g, s2 * 0.55, -0.55, 0.22); g.fill(); }
+    g.fillStyle = '#FFFFFF'; g.font = `900 0.62px ${GO}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('M', 0, -0.52);
+  }
+  g.restore();
+  g.fillStyle = 'rgba(255,255,255,0.45)'; ell(g, -0.35, -0.55, 0.3, 0.16, -0.5); g.fill();
+  seg(g, -1, 0, 1, 0, 0.16);
+  circ(g, 0, 0, 1); g.lineWidth = 0.12; g.strokeStyle = INK; g.stroke();
+  circ(g, 0, 0, 0.32); g.fillStyle = '#FFFFFF'; g.fill(); g.lineWidth = 0.12; g.stroke();
+  circ(g, 0, 0, 0.16); g.lineWidth = 0.05; g.strokeStyle = '#9A94A6'; g.stroke();
+  s = { canvas: c, size };
+  sprites.set(key, s);
+  return s;
+}
+
+/* Scenery: one park at golden hour and the same park at dusk. Each has a sky
+   layer (behind the sun) and a land layer (in front of it); the game fades from
+   golden hour to dusk over the round as the sun sets. */
+let scenery = null;
+function buildScenery() {
+  scenery = {};
+  for (const dusk of [false, true]) {
+    scenery[dusk ? 'skyDusk' : 'sky'] = paintLayer(g => drawSky(g, dusk));
+    scenery[dusk ? 'landDusk' : 'land'] = paintLayer(g => drawLand(g, dusk));
+  }
+  scenery.overlay = paintLayer(drawOverlay);
+  scenery.grain = makeGrain();
+}
+function paintLayer(fn) {
+  const c = document.createElement('canvas');
+  c.width = canvas.width; c.height = canvas.height;
+  const g = c.getContext('2d');
+  g.scale(scale, scale);
+  fn(g);
+  return c;
+}
+
+const sy = y => L.arenaTop + y;     // arena y → screen y
+
+function drawSky(g, dusk) {
+  const sky = g.createLinearGradient(0, L.panelTop, 0, sy(HORIZON));
+  if (!dusk) {
+    sky.addColorStop(0, '#3E6FC0'); sky.addColorStop(0.42, '#9A8FD0'); sky.addColorStop(0.7, '#F7A27A'); sky.addColorStop(1, '#FFD88A');
+  } else {
+    sky.addColorStop(0, '#0E1236'); sky.addColorStop(0.45, '#33275E'); sky.addColorStop(0.78, '#8A3E74'); sky.addColorStop(1, '#F2795A');
+  }
+  g.fillStyle = sky;
+  g.fillRect(0, 0, LW, sy(HORIZON) + 40);
+  const rnd = seeded(dusk ? 21 : 9);
+  if (dusk) {                                               // stars
+    for (let i = 0; i < 90; i++) {
+      const y = lerp(L.panelTop, sy(HORIZON - 60), Math.pow(rnd(), 1.6));
+      g.fillStyle = `rgba(255,255,255,${0.35 + rnd() * 0.6})`;
+      circ(g, rnd() * LW, y, 0.5 + rnd() * 1.1); g.fill();
+    }
+  }
+  const cloud = (x, y, k, col) => {                         // long sunset clouds
+    g.fillStyle = col;
+    for (const [dx, dy, rx, ry] of [[-40, 4, 46, 9], [0, -3, 52, 12], [44, 3, 40, 8], [10, 7, 70, 6]]) { ell(g, x + dx * k, y + dy * k, rx * k, ry * k); g.fill(); }
+  };
+  const cc = dusk ? ['rgba(160,80,140,0.55)', 'rgba(110,60,120,0.5)'] : ['rgba(255,200,170,0.75)', 'rgba(255,170,150,0.6)'];
+  cloud(410, L.title2 + 30, 0.9, cc[0]); cloud(120, sy(60), 1.1, cc[1]); cloud(380, sy(150), 0.8, cc[0]); cloud(90, L.stripY - 40, 0.7, cc[0]);
+}
+
+function drawLand(g, dusk) {
+  const rnd = seeded(5);
+  // distant city skyline (lit windows at dusk)
+  let x = -10;
+  g.fillStyle = dusk ? '#2A2148' : '#8C6F9E';
+  const wins = [];
+  while (x < LW + 10) {
+    const w = 18 + rnd() * 34, h = 30 + rnd() * 90;
+    g.fillRect(x, sy(HORIZON) - h, w, h + 2);
+    if (rnd() < 0.35) g.fillRect(x + w * 0.4, sy(HORIZON) - h - 14, 3, 14);    // antenna
+    for (let wy = sy(HORIZON) - h + 6; wy < sy(HORIZON) - 6; wy += 8) for (let wx = x + 4; wx < x + w - 4; wx += 7) if (rnd() < 0.3) wins.push([wx, wy]);
+    x += w + rnd() * 6;
+  }
+  if (dusk) { g.fillStyle = 'rgba(255,214,120,0.85)'; for (const [wx, wy] of wins) g.fillRect(wx, wy, 2.5, 3.5); }
+  // haze over the skyline
+  const hz = g.createLinearGradient(0, sy(HORIZON) - 100, 0, sy(HORIZON) + 6);
+  hz.addColorStop(0, dusk ? 'rgba(242,121,90,0)' : 'rgba(255,216,138,0)');
+  hz.addColorStop(1, dusk ? 'rgba(242,121,90,0.45)' : 'rgba(255,216,138,0.55)');
+  g.fillStyle = hz; g.fillRect(0, sy(HORIZON) - 100, LW, 106);
+  // tree line
+  g.fillStyle = dusk ? '#1A1A2E' : '#5A6B3A';
+  for (let tx = -10; tx < LW + 20; tx += 16 + rnd() * 14) { const r = 14 + rnd() * 16; circ(g, tx, sy(HORIZON) + 4 - r * 0.5, r); g.fill(); }
+  g.fillRect(0, sy(HORIZON) - 4, LW, 12);
+  // the lawn, lit low and warm from the left
+  const lawn = g.createLinearGradient(0, sy(HORIZON), 0, sy(GROUND));
+  if (!dusk) { lawn.addColorStop(0, '#9DAF4E'); lawn.addColorStop(1, '#6E9A3A'); } else { lawn.addColorStop(0, '#2C3A3E'); lawn.addColorStop(1, '#1E2E2A'); }
+  g.fillStyle = lawn; g.fillRect(0, sy(HORIZON) + 6, LW, sy(GROUND) - sy(HORIZON));
+  const glow = g.createRadialGradient(60, sy(HORIZON), 10, 60, sy(HORIZON), 360);
+  glow.addColorStop(0, dusk ? 'rgba(242,121,90,0.25)' : 'rgba(255,214,120,0.45)'); glow.addColorStop(1, 'rgba(255,214,120,0)');
+  g.fillStyle = glow; g.fillRect(0, sy(HORIZON), LW, sy(GROUND) - sy(HORIZON));
+  // a winding path across the lawn
+  g.beginPath(); g.moveTo(-10, sy(GROUND - 30)); g.bezierCurveTo(150, sy(GROUND - 70), 260, sy(HORIZON + 70), 420, sy(HORIZON + 30));
+  g.lineWidth = 16; g.strokeStyle = dusk ? 'rgba(90,80,90,0.5)' : 'rgba(240,210,150,0.6)'; g.stroke();
+  // lamp posts
+  for (const lx of LAMPS) {
+    g.fillStyle = dusk ? '#14131E' : '#3E3346';
+    g.fillRect(lx - 2, sy(GROUND - 168), 4, 168);
+    roundRect(g, lx - 7, sy(GROUND - 182), 14, 16, 4); g.fill();
+    g.fillStyle = dusk ? '#FFE6A8' : '#E8D9B8'; g.fillRect(lx - 4, sy(GROUND - 178), 8, 9);
+  }
+  // the bench (left) and the playground deck (middle), with long shadows
+  const wood = dusk ? '#4A3530' : '#9A6440', woodDark = dusk ? '#2E2020' : '#6A4128', steel = dusk ? '#38344A' : '#6E7A92';
+  const B = PLATFORMS[0], P = PLATFORMS[1];
+  g.fillStyle = 'rgba(30,20,40,0.28)';
+  g.beginPath(); g.moveTo(B.x1, sy(GROUND)); g.lineTo(B.x2, sy(GROUND)); g.lineTo(B.x2 + 60, sy(GROUND) + 8); g.lineTo(B.x1 + 60, sy(GROUND) + 8); g.closePath(); g.fill();
+  for (const lx of [B.x1 + 10, B.x2 - 10]) { g.fillStyle = woodDark; g.fillRect(lx - 3, sy(B.y), 6, GROUND - B.y); }
+  roundRect(g, B.x1 - 4, sy(B.y) - 4, B.x2 - B.x1 + 8, 9, 3); g.fillStyle = wood; g.fill(); g.lineWidth = 1.5; g.strokeStyle = INK; g.stroke();
+  for (const yy of [B.y - 34, B.y - 22]) { roundRect(g, B.x1, sy(yy), B.x2 - B.x1, 7, 3); g.fillStyle = wood; g.fill(); g.stroke(); }
+  for (const lx of [B.x1 + 10, B.x2 - 10]) { g.fillStyle = woodDark; g.fillRect(lx - 2, sy(B.y - 36), 4, 34); }
+  for (const lx of [P.x1 + 6, P.x2 - 6]) { g.fillStyle = steel; g.fillRect(lx - 3, sy(P.y - 40), 6, GROUND - P.y + 40); }
+  g.beginPath(); g.moveTo(P.x1 - 6, sy(P.y - 40)); g.lineTo((P.x1 + P.x2) / 2, sy(P.y - 64)); g.lineTo(P.x2 + 6, sy(P.y - 40)); g.closePath();
+  g.fillStyle = dusk ? '#7A2E3A' : '#E8573E'; g.fill(); g.lineWidth = 1.5; g.strokeStyle = INK; g.stroke();
+  g.beginPath(); g.moveTo(P.x2, sy(P.y + 4)); g.quadraticCurveTo(P.x2 + 40, sy(P.y + 20), P.x2 + 46, sy(GROUND - 6));     // slide (decoration)
+  g.lineWidth = 7; g.strokeStyle = dusk ? '#8A6A2A' : '#F2B73A'; g.stroke();
+  roundRect(g, P.x1 - 4, sy(P.y) - 4, P.x2 - P.x1 + 8, 9, 3); g.fillStyle = dusk ? '#3A4A6A' : '#4F8FD6'; g.fill(); g.lineWidth = 1.5; g.strokeStyle = INK; g.stroke();
+  // the rock
+  g.beginPath(); g.moveTo(ROCK.x1 - 6, sy(GROUND) + 2);
+  g.bezierCurveTo(ROCK.x1 + 10, sy(ROCK.peak + 6), (ROCK.x1 + ROCK.x2) / 2 - 20, sy(ROCK.peak - 4), (ROCK.x1 + ROCK.x2) / 2, sy(ROCK.peak - 3));
+  g.bezierCurveTo((ROCK.x1 + ROCK.x2) / 2 + 24, sy(ROCK.peak - 2), ROCK.x2 - 6, sy(ROCK.peak + 10), ROCK.x2 + 6, sy(GROUND) + 2);
+  g.closePath();
+  const rg = g.createLinearGradient(ROCK.x1, 0, ROCK.x2, 0);
+  rg.addColorStop(0, dusk ? '#5A5468' : '#D8A878'); rg.addColorStop(1, dusk ? '#2E2A3A' : '#7E6A62');
+  g.fillStyle = rg; g.fill(); g.lineWidth = 1.8; g.strokeStyle = INK; g.stroke();
+  // ground + foreground grass (in front of everything below the ground line)
+  const fg = g.createLinearGradient(0, sy(GROUND), 0, L.panelBottom);
+  if (!dusk) { fg.addColorStop(0, '#5E8F2E'); fg.addColorStop(1, '#3E6A22'); } else { fg.addColorStop(0, '#1A2A22'); fg.addColorStop(1, '#0E1814'); }
+  g.fillStyle = fg; g.fillRect(0, sy(GROUND) - 2, LW, L.panelBottom - sy(GROUND) + 2);
+  g.strokeStyle = dusk ? '#2A4034' : '#8CBF4A'; g.lineWidth = 1.4; g.lineCap = 'round';
+  for (let i = 0; i < 160; i++) {
+    const gx = rnd() * LW, gy = sy(GROUND) + rnd() * (L.panelBottom - sy(GROUND)), h = 4 + rnd() * 7;
+    g.beginPath(); g.moveTo(gx, gy); g.lineTo(gx + rand(-2, 3), gy - h); g.stroke();
+  }
+  g.fillStyle = dusk ? 'rgba(255,255,255,0.05)' : 'rgba(255,230,150,0.3)'; g.fillRect(0, sy(GROUND) - 2, LW, 3);
+}
+const LAMPS = [176, 452];
+
+// Camera viewfinder: vignette, corner brackets, AR badge (static).
+function drawOverlay(g) {
+  const vg = g.createRadialGradient(LW / 2, (L.panelTop + L.panelBottom) / 2, 200, LW / 2, (L.panelTop + L.panelBottom) / 2, 560);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(10,0,20,0.55)');
+  g.fillStyle = vg; g.fillRect(0, L.panelTop, LW, L.panelBottom - L.panelTop);
+  g.strokeStyle = 'rgba(255,255,255,0.85)'; g.lineWidth = 3; g.lineCap = 'round';
+  const x0 = 12, x1 = LW - 12, y0 = L.arenaTop - 6, y1 = L.panelBottom - 12, k = 26;
+  for (const [cx, cy, dx, dy] of [[x0, y0, 1, 1], [x1, y0, -1, 1], [x0, y1, 1, -1], [x1, y1, -1, -1]]) {
+    g.beginPath(); g.moveTo(cx, cy + dy * k); g.lineTo(cx, cy); g.lineTo(cx + dx * k, cy); g.stroke();
+  }
+  roundRect(g, x1 - 52, y1 - 34, 44, 24, 12); g.fillStyle = 'rgba(20,10,30,0.5)'; g.fill();
+  g.font = `italic 900 13px ${GO}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#FFFFFF';
+  g.fillText('AR', x1 - 30, y1 - 21);
+  // the hook
+  g.textAlign = 'center';
+  fitFont(g, HOOK[0], 250, 18, 800);
+  roundRect(g, L.cx - 100, L.hudY - 15, 200, 30, 15); g.fillStyle = 'rgba(20,10,30,0.5)'; g.fill();
+  g.fillStyle = '#FFFFFF'; g.fillText(HOOK[0], L.cx, L.hudY + 1);
+  fitFont(g, HOOK[1], 470, 46, 900, 'italic');
+  catchText(g, HOOK[1], L.cx, L.title2, '#FFFFFF', 7);
+  fitFont(g, HOOK[2], 490, 46, 900, 'italic');
+  const w = g.measureText(HOOK[2]).width;
+  const gr = g.createLinearGradient(0, L.title3 - 20, 0, L.title3 + 20);
+  gr.addColorStop(0, '#FFE57A'); gr.addColorStop(0.55, '#FFB43A'); gr.addColorStop(1, '#FF6A3D');
+  catchText(g, HOOK[2], L.cx, L.title3, gr, 7);
+}
+
+// Film grain (a tile drawn with a random offset every frame).
+function makeGrain() {
+  const n = 128, c = document.createElement('canvas');
+  c.width = c.height = n;
+  const g = c.getContext('2d'), img = g.createImageData(n, n);
+  for (let i = 0; i < n * n; i++) { const v = Math.random() * 255; img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v; img.data[i * 4 + 3] = 20; }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+
+const dusk = () => clamp((S.roundT / ROUND_SECONDS - 0.12) / 0.78, 0, 1);
+
+function drawSun() {
+  const d = dusk();
+  const x = 92 + 40 * d, y = sy(HORIZON - 150 + 175 * easeInOut(d));
+  const col = mix('#FFF3C2', '#FF7A4A', d);
+  const gl = ctx.createRadialGradient(x, y, 0, x, y, 190);
+  gl.addColorStop(0, rgba(col, 0.75)); gl.addColorStop(0.25, rgba(mix('#FFD27A', '#FF5A5A', d), 0.35)); gl.addColorStop(1, 'rgba(255,180,120,0)');
+  ctx.fillStyle = gl; circ(ctx, x, y, 190); ctx.fill();
+  circ(ctx, x, y, 30); ctx.fillStyle = col; ctx.fill();
+  return [x, y];
+}
+// Lens flare: soft ghosts along the line from the sun through the middle of the frame.
+function drawFlare(sx0, sy0) {
+  const d = dusk(), k = 1 - d;
+  if (k <= 0.05) return;
+  const cx = LW / 2, cy = (L.panelTop + L.panelBottom) / 2;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const [t, r, col, a] of [[0.45, 26, '#FFB36B', 0.12], [0.8, 12, '#FF8AD0', 0.16], [1.15, 44, '#7FD0FF', 0.08], [1.5, 18, '#FFE57A', 0.14], [1.9, 70, '#FF9A6B', 0.06]]) {
+    const x = lerp(sx0, cx, t), y = lerp(sy0, cy, t);
+    const gr = ctx.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, rgba(col, a * k)); gr.addColorStop(0.7, rgba(col, a * k * 0.6)); gr.addColorStop(1, rgba(col, 0));
+    ctx.fillStyle = gr; circ(ctx, x, y, r); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawLampGlow() {
+  const k = Math.max(S.lampsOn, clamp((dusk() - 0.62) * 4, 0, 1));
+  if (k <= 0) return;
+  const flick = S.lampsOn > 0 && S.lampsOn < 1 ? (Math.random() < 0.5 ? 0.4 : 1) : 1;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const lx of LAMPS) {
+    const y = sy(GROUND - 174);
+    const gr = ctx.createRadialGradient(lx, y, 0, lx, y, 120);
+    gr.addColorStop(0, `rgba(255,220,140,${0.5 * k * flick})`); gr.addColorStop(1, 'rgba(255,200,120,0)');
+    ctx.fillStyle = gr; circ(ctx, lx, y, 120); ctx.fill();
+    const cone = ctx.createLinearGradient(0, y, 0, sy(GROUND));
+    cone.addColorStop(0, `rgba(255,220,140,${0.22 * k * flick})`); cone.addColorStop(1, 'rgba(255,220,140,0)');
+    ctx.fillStyle = cone;
+    ctx.beginPath(); ctx.moveTo(lx - 6, y); ctx.lineTo(lx + 6, y); ctx.lineTo(lx + 60, sy(GROUND)); ctx.lineTo(lx - 60, sy(GROUND)); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// GO's catch ring: white outer circle, colored inner circle that shrinks and grows.
+function ringColor(rate) { return rate >= 0.26 ? '#5FE07A' : rate >= 0.2 ? '#F7E04A' : rate >= 0.14 ? '#FF9A3D' : '#FF4D4D'; }
+function drawRings() {
+  const targeted = new Map();
+  for (const b of S.balls) if (b.state === 'fly' && b.target && b.target.state === 'free' && b.kind !== 'master') targeted.set(b.target, b);
+  for (const [m, b] of targeted) {
+    const R = m.r + 12, k = ringSize(b);
+    const y = sy(m.y);
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ell(ctx, m.x, y, R, R); ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.stroke();
+    ell(ctx, m.x, y, R * k, R * k); ctx.lineWidth = 3.5; ctx.strokeStyle = ringColor(m.def.rate * (m.razzT > 0 ? 1.6 : 1)); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawMon(m) {
+  if (m.state === 'caught' || m.state === 'inball') return;
+  const y = sy(m.y);
+  if (m.digT > 0) {                                         // a dirt mound tunnels along
+    ell(ctx, m.x, sy(GROUND) - 2, 14, 6); ctx.fillStyle = '#6B4A2E'; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = INK; ctx.stroke();
+    return;
+  }
+  let k = 1;
+  if (m.state === 'absorb') k = 1 - clamp(m.absorbT / 0.35, 0, 1);
+  if (k <= 0) return;
+  // ground shadow
+  if (!m.def.fly || m.y > GROUND - 200) {
+    const h = clamp((GROUND - m.y - m.r) / 200, 0, 1);
+    ell(ctx, m.x + 6, sy(GROUND) - 1, m.r * (1 - h * 0.5) * 1.1, 3.5 * (1 - h * 0.5)); ctx.fillStyle = `rgba(20,10,30,${0.35 * (1 - h)})`; ctx.fill();
+  }
+  for (let i = 0; i < m.trail.length; i++) {                // Quick Attack streaks
+    ctx.globalAlpha = (i + 1) / m.trail.length * 0.35;
+    circ(ctx, m.trail[i][0], sy(m.trail[i][1]), m.r * 0.9); ctx.fillStyle = '#FFF2A0'; ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  if (m.razzT > 0) {                                        // ate a berry: glowing
+    circ(ctx, m.x, y, m.r + 5 + Math.sin(S.time * 10) * 1.5); ctx.fillStyle = m.golden ? 'rgba(255,210,63,0.45)' : 'rgba(255,90,122,0.35)'; ctx.fill();
+  }
+  ctx.save();
+  ctx.translate(m.x, y);
+  if (m.state === 'absorb') {                               // turning into red light
+    ctx.globalAlpha = k;
+    ctx.scale(k, k);
+  }
+  if (m.phaseT > 0) ctx.globalAlpha = 0.35 + 0.15 * Math.sin(S.time * 20);
+  if (m.invulnT > 0 && m.state === 'free' && Math.floor(S.time * 16) % 2) ctx.globalAlpha = 0.5;
+  const sq = m.squash, bounce = m.grounded && Math.abs(m.vx) > 10 ? Math.abs(Math.sin(m.walk)) * 0.08 : 0;
+  const puff = m.puffT > 0 ? 1.3 : 1;
+  ctx.scale(puff * (1 + sq * 0.2), puff * (1 - sq * 0.2 - bounce));
+  // little feet
+  if (!m.def.fly && m.def.id !== 'magikarp' && m.def.id !== 'ditto' && m.transT <= 0) {
+    for (const s of [-1, 1]) {
+      const lift = m.grounded ? Math.max(0, Math.sin(m.walk + (s > 0 ? Math.PI : 0))) * 3 : 2;
+      ell(ctx, s * m.r * 0.45, m.r * 0.9 - lift, m.r * 0.3, m.r * 0.18); ctx.fillStyle = darken(m.def.color, 0.15); ctx.fill();
+      ctx.lineWidth = 1.2; ctx.strokeStyle = INK; ctx.stroke();
+    }
+  }
+  if (m.face < 0) ctx.scale(-1, 1);
+  const sp = getSprite(m.transT > 0 ? 'dittoBall' : m.def.id, m.r);
+  ctx.drawImage(sp.canvas, -sp.size / 2, -sp.size / 2, sp.size, sp.size);
+  ctx.restore();
+  if (m.state === 'absorb') {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    circ(ctx, m.x, y, m.r * k + 4); ctx.fillStyle = `rgba(255,60,60,${0.6 * (1 - k)})`; ctx.fill();
+    ctx.restore();
+  }
+  if (m.barrierT > 0) { circ(ctx, m.x, y, m.r + 10); ctx.fillStyle = 'rgba(255,154,210,0.3)'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#FFC2E2'; ctx.stroke(); }
+  if (m.def.id === 'snorlax' && m.state === 'free' && Math.floor(S.time * 1.2 + m.idx) % 3 === 0) {   // Zzz
+    ctx.save(); ctx.font = `italic 900 ${11 + (S.time * 1.2 % 1) * 5}px ${GO}`; ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fillText('z', m.x + m.r * 0.8, y - m.r - 4 - (S.time * 1.2 % 1) * 12);
+    ctx.restore();
+  }
+}
+
+function drawBall(b) {
+  const sp = getBallSprite(b.kind, b.r);
+  const y = sy(b.y);
+  let alpha = b.state === 'dead' ? clamp(1 - (b.fade || 0) / 0.5, 0, 1) : b.state === 'caught' ? clamp(1 - (b.caughtT - 0.9) / 0.5, 0, 1) : 1;
+  if (alpha <= 0) return;
+  if (b.state === 'fly' && b.y < GROUND - 20) {             // shadow on the ground, growing as it falls
+    const h = clamp((GROUND - b.y) / 400, 0, 1);
+    ell(ctx, b.x + 4, sy(GROUND) - 1, b.r * (1.2 - h * 0.7), 2.5 * (1 - h * 0.6)); ctx.fillStyle = `rgba(20,10,30,${0.3 * (1 - h)})`; ctx.fill();
+  }
+  if (b.curve && b.state === 'fly') {                       // curveball sparkles
+    for (let i = 0; i < 3; i++) { const a = S.time * 18 + i * TAU / 3; dot(ctx, b.x + Math.cos(a) * (b.r + 4), y + Math.sin(a) * (b.r + 4), 1.6, '#FFE8F6'); }
+  }
+  if (b.kind === 'master' && b.state === 'fly') {
+    const gr = ctx.createRadialGradient(b.x, y, 0, b.x, y, 26);
+    gr.addColorStop(0, 'rgba(240,107,200,0.6)'); gr.addColorStop(1, 'rgba(240,107,200,0)');
+    ctx.fillStyle = gr; circ(ctx, b.x, y, 26); ctx.fill();
+  }
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(b.x, y);
+  let rot = b.rot;
+  if (b.state === 'catch' || b.state === 'caught') {        // drawn bigger, resting on the ground
+    const grow = b.state === 'caught' ? 1.4 : 1 + 0.4 * clamp(b.catchT / 0.35, 0, 1);
+    ctx.translate(0, b.r * (1 - grow));
+    ctx.scale(grow, grow);
+  }
+  if (b.state === 'catch') {                                // the 1-2-3 wobble
+    rot = 0;
+    if (b.wobT !== undefined && b.wobT < 0.45) rot = Math.sin(b.wobT / 0.45 * TAU) * 0.45 * (1 - b.wobT / 0.45 * 0.3);
+    if (b.catchT < 0.35) { const s2 = 1 + 0.25 * Math.sin(b.catchT / 0.35 * Math.PI); ctx.scale(s2, s2); }
+    ctx.translate(0, b.r); ctx.rotate(rot); ctx.translate(0, -b.r);
+    rot = 0;
+  }
+  if (b.state === 'caught') rot = 0;
+  ctx.rotate(rot);
+  ctx.drawImage(sp.canvas, -sp.size / 2, -sp.size / 2, sp.size, sp.size);
+  if (b.state === 'catch' && b.wobT !== undefined && b.wobT < 0.5) {     // the button glows red as it wobbles
+    circ(ctx, 0, 0, b.r * 0.3); ctx.fillStyle = `rgba(255,70,70,${0.9 * (1 - b.wobT / 0.5)})`; ctx.fill();
+  }
+  if (b.state === 'caught') { circ(ctx, 0, 0, b.r * 0.3); ctx.fillStyle = '#FFE57A'; ctx.fill(); }
+  ctx.restore();
+}
+
+function drawBerries() {
+  for (const br of S.berries) {
+    const y = sy(br.y);
+    if (br.golden) { const gr = ctx.createRadialGradient(br.x, y, 0, br.x, y, 22); gr.addColorStop(0, 'rgba(255,220,90,0.7)'); gr.addColorStop(1, 'rgba(255,220,90,0)'); ctx.fillStyle = gr; circ(ctx, br.x, y, 22); ctx.fill(); }
+    ell(ctx, br.x, y, br.r, br.r * 1.05); ink(ctx, br.golden ? '#FFC93A' : '#E8384F', 1.4);
+    ctx.fillStyle = br.golden ? '#FFF2A8' : '#FF9AA8';
+    for (const [dx, dy] of [[-2.5, -1], [2, 1.5], [-0.5, 3]]) { circ(ctx, br.x + dx, y + dy, 1); ctx.fill(); }
+    ctx.beginPath(); ctx.moveTo(br.x, y - br.r); ctx.lineTo(br.x - 4, y - br.r - 5); ctx.lineTo(br.x + 4, y - br.r - 4); ctx.closePath();
+    ctx.fillStyle = '#5DBE6E'; ctx.fill();
+  }
+}
+
+// Team GO Rocket's Meowth balloon with a big net.
+function drawRocket(R) {
+  const x = R.x, y = sy(R.y) + Math.sin(R.t * 2.2) * 6;
+  ctx.save(); ctx.translate(x, y);
+  ctx.globalAlpha = 0.55;                                    // vacuum cone
+  const cone = ctx.createLinearGradient(0, 30, 0, 110);
+  cone.addColorStop(0, 'rgba(255,230,230,0.45)'); cone.addColorStop(1, 'rgba(255,230,230,0)');
+  ctx.fillStyle = cone; ctx.beginPath(); ctx.moveTo(-10, 40); ctx.lineTo(10, 40); ctx.lineTo(70, 120); ctx.lineTo(-70, 120); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = 1;
+  for (const s of [-1, 1]) seg(ctx, s * 18, 18, s * 9, 36, 1.4, '#3A2A20');
+  roundRect(ctx, -12, 34, 24, 14, 3); ctx.fillStyle = '#7A5230'; ctx.fill(); ctx.lineWidth = 1.6; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.font = `900 11px ${GO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#E23B3B'; ctx.fillText('R', 0, 42);
+  for (const s of [-1, 1]) {
+    ctx.beginPath(); ctx.moveTo(s * 12, -24); ctx.lineTo(s * 30, -36); ctx.lineTo(s * 28, -10); ctx.closePath(); ink(ctx, '#F3E3B5', 1.8);
+    ctx.beginPath(); ctx.moveTo(s * 16, -22); ctx.lineTo(s * 27, -30); ctx.lineTo(s * 26, -14); ctx.closePath(); ctx.fillStyle = '#5A3A2A'; ctx.fill();
+  }
+  const gr = ctx.createRadialGradient(-10, -12, 4, 0, 0, 32);
+  gr.addColorStop(0, '#FFF6DA'); gr.addColorStop(1, '#D9B97A');
+  circ(ctx, 0, 0, 30); ctx.fillStyle = gr; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = INK; ctx.stroke();
+  ell(ctx, 0, -17, 7, 6.5); ink(ctx, '#F5C542', 1.6);
+  for (const s of [-1, 1]) {
+    ell(ctx, s * 11, -2, 5.5, 7); ink(ctx, '#FFFFFF', 1.4);
+    ell(ctx, s * 11, -1, 1.6, 5); ctx.fillStyle = '#111111'; ctx.fill();
+    for (const dy of [-3, 1, 5]) seg(ctx, s * 16, 8 + dy * 0.4, s * 34, 4 + dy * 1.4, 1, INK);
+  }
+  ctx.beginPath(); ctx.moveTo(-9, 12); ctx.quadraticCurveTo(0, 20, 9, 12); ctx.lineWidth = 1.6; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.restore();
+}
+
+// Master Ball lock-on reticle.
+function drawLockOn() {
+  const M = S.master;
+  if (!M || M.launched || M.target.state !== 'free') return;
+  const m = M.target, y = sy(m.y), k = clamp(M.t / 0.6, 0, 1), R = m.r + 30 - 14 * k;
+  ctx.save();
+  ctx.translate(m.x, y); ctx.rotate(S.time * 2);
+  ctx.strokeStyle = '#F06BC8'; ctx.lineWidth = 2.5;
+  circ(ctx, 0, 0, R); ctx.stroke();
+  for (let i = 0; i < 4; i++) { ctx.rotate(Math.PI / 2); seg(ctx, R - 6, 0, R + 8, 0, 2.5, '#F06BC8'); }
+  ctx.restore();
+}
+
+function drawFx() {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const f of S.fx) {
+    const t = 1 - f.life / f.max;
+    if (f.kind === 'ring') {
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = f.color;
+      ctx.lineWidth = f.width * (1 - t) + 1;
+      ctx.beginPath(); ctx.arc(f.x, sy(f.y), Math.max(0, f.r0 + (f.r1 - f.r0) * easeOut(t)), 0, TAU); ctx.stroke();
+    } else if (f.kind === 'spark') {
+      ctx.globalAlpha = 1 - t;
+      ctx.fillStyle = f.color;
+      circ(ctx, f.x, sy(f.y), f.size * (1 - t * 0.5)); ctx.fill();
+    } else if (f.kind === 'star') {
+      ctx.globalAlpha = 1 - t * t;
+      ctx.save(); ctx.translate(f.x, sy(f.y)); ctx.rotate(t * 6);
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) { const a = i * Math.PI / 5 - Math.PI / 2, r = i % 2 ? 2.6 : 6.5; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); }
+      ctx.closePath(); ctx.fillStyle = '#FFE57A'; ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = INK; ctx.stroke();
+      ctx.restore();
+    } else if (f.kind === 'confetti') {
+      ctx.globalAlpha = t < 0.85 ? 1 : (1 - t) / 0.15;
+      ctx.save(); ctx.translate(f.x, sy(f.y)); ctx.rotate(f.a);
+      ctx.fillStyle = f.color; ctx.fillRect(-f.size / 2, -f.size / 4, f.size, f.size / 2);
+      ctx.restore();
+    } else if (f.kind === 'leaf') {
+      ctx.globalAlpha = t < 0.8 ? 1 : (1 - t) / 0.2;
+      ctx.save(); ctx.translate(f.x, sy(f.y)); ctx.rotate(f.a);
+      ell(ctx, 0, 0, 5, 2.4); ctx.fillStyle = f.color; ctx.fill();
+      ctx.restore();
+    } else if (f.kind === 'vine' || f.kind === 'water' || f.kind === 'ember') {
+      ctx.globalAlpha = 1 - t;
+      const x1 = f.x1, y1 = sy(f.y1), x2 = f.x2, y2 = sy(f.y2);
+      ctx.lineCap = 'round';
+      if (f.kind === 'vine') {
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.quadraticCurveTo((x1 + x2) / 2 + 20, Math.min(y1, y2) - 30, x2, y2);
+        ctx.lineWidth = 4; ctx.strokeStyle = INK; ctx.stroke(); ctx.lineWidth = 2.5; ctx.strokeStyle = '#4FAE5A'; ctx.stroke();
+      } else {
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+        ctx.lineWidth = 9; ctx.strokeStyle = f.kind === 'water' ? 'rgba(120,200,255,0.6)' : 'rgba(255,120,40,0.6)'; ctx.stroke();
+        ctx.lineWidth = 4; ctx.strokeStyle = f.kind === 'water' ? '#E8F6FF' : '#FFE07A'; ctx.stroke();
+      }
+    }
+  }
+  for (const f of S.fx) {
+    if (f.kind !== 'float') continue;
+    const t = 1 - f.life / f.max;
+    const pop = t < 0.12 ? 0.5 + 0.5 * easeOutBack(t / 0.12) : 1;
+    ctx.globalAlpha = t < 0.75 ? 1 : (1 - t) / 0.25;
+    const y = sy(f.y) - 26 * easeOut(t), x = clamp(f.x, 90, LW - 90);
+    fitFont(ctx, f.text, 300, f.size * pop, 900, 'italic');
+    catchText(ctx, f.text, x, y, f.color, 5);
+  }
+  ctx.restore();
+}
+
+// The 12 Pokémon along the top: free, being caught, or caught (in a Poké Ball).
+function drawStrip() {
+  const n = S.mons.length, gap = (LW - 52) / (n - 1), r = 14;
+  roundRect(ctx, 10, L.stripY - 21, LW - 20, 42, 21); ctx.fillStyle = 'rgba(20,10,30,0.45)'; ctx.fill();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.stroke();
+  for (const m of S.mons) {
+    const x = 26 + m.idx * gap, y = L.stripY;
+    const caught = m.state === 'caught' && m.caughtT > 0.5;
+    const sp = getSprite(m.def.id, r, caught);
+    const bob = m === S.winner ? Math.sin(S.time * 6) * 2 : 0;
+    ctx.drawImage(sp.canvas, x - sp.size / 2, y - sp.size / 2 + bob, sp.size, sp.size);
+    if (caught) {
+      const bs = getBallSprite('poke', 6);
+      ctx.drawImage(bs.canvas, x + 4, y + 2, bs.size, bs.size);
+    } else if (m.state === 'absorb' || m.state === 'inball') {
+      circ(ctx, x, y, r + 3); ctx.lineWidth = 2.5; ctx.strokeStyle = `rgba(255,80,80,${0.6 + 0.4 * Math.sin(S.time * 12)})`; ctx.stroke();
+    } else if (m === S.winner) {
+      drawCrown(x, y - r - 7);
+    }
+  }
+}
+
+function drawCrown(x, y, k = 1) {
+  ctx.save();
+  ctx.translate(x, y); ctx.scale(k, k);
+  ctx.beginPath();
+  ctx.moveTo(-9, 4); ctx.lineTo(-9, -4); ctx.lineTo(-4.5, 0); ctx.lineTo(0, -6); ctx.lineTo(4.5, 0); ctx.lineTo(9, -4); ctx.lineTo(9, 4);
+  ctx.closePath();
+  ctx.fillStyle = '#FFD23F'; ctx.fill();
+  ctx.lineWidth = 1.8; ctx.lineJoin = 'round'; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.restore();
+}
+
+// Timer (left) and Pokémon still free (right): translucent camera-UI pills.
+function drawHud() {
+  const secs = Math.max(0, Math.ceil(S.clock));
+  const text = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  const urgent = !S.timeUp && S.clock <= 10;
+  const pulse = urgent ? 1 + 0.12 * Math.pow(S.clock - Math.floor(S.clock), 3) : 1;
+  const pill = (x, w, color) => {
+    roundRect(ctx, x - w / 2, L.hudY - 18, w, 36, 18); ctx.fillStyle = color; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.stroke();
+  };
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.save();
+  ctx.translate(64, L.hudY); ctx.scale(pulse, pulse); ctx.translate(-64, -L.hudY);
+  pill(64, 100, urgent || S.timeUp ? 'rgba(230,57,70,0.9)' : 'rgba(20,10,30,0.55)');
+  ctx.font = `italic 900 23px ${GO}`; ctx.fillStyle = '#FFFFFF';
+  ctx.fillText(text, 64, L.hudY + 1);
+  ctx.restore();
+  const left = freeMons().length;
+  pill(474, 104, 'rgba(20,10,30,0.55)');
+  const bs = getBallSprite('poke', 8);
+  ctx.drawImage(bs.canvas, 440 - bs.size / 2, L.hudY - bs.size / 2, bs.size, bs.size);
+  ctx.font = `italic 900 15px ${GO}`; ctx.fillStyle = '#FFFFFF';
+  ctx.fillText(`${left} LEFT`, 488, L.hudY + 1);
+  ctx.restore();
+}
+
+// Big italic catch-screen banners.
+function drawBanner() {
+  const B = S.banner;
+  if (!B) return;
+  if (B.kind === 'final' || B.kind === 'win') { drawWinner(B); return; }
+  const age = B.max - B.life;
+  const inT = clamp(age / 0.22, 0, 1), outT = clamp(B.life / 0.3, 0, 1);
+  const y = B.kind === 'caught' ? sy(110) : sy(170);
+  ctx.save();
+  ctx.globalAlpha = outT;
+  ctx.translate(L.acx + (1 - easeOut(inT)) * -300, y);
+  ctx.transform(1, 0, -0.12, 1, 0, 0);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (B.kind === 'caught') {
+    roundRect(ctx, -200, -22, 400, 44, 22); ctx.fillStyle = 'rgba(20,10,30,0.6)'; ctx.fill();
+    const sp = getSprite(B.face.id, 16);
+    ctx.drawImage(sp.canvas, -186 - sp.size / 2 + 16, -sp.size / 2, sp.size, sp.size);
+    fitFont(ctx, B.text, 320, 22, 900, 'italic');
+    catchText(ctx, B.text, 16, 1, '#FFD23F', 5);
+  } else {
+    roundRect(ctx, -230, -46, 460, 92, 18);
+    const gr = ctx.createLinearGradient(-230, 0, 230, 0);
+    gr.addColorStop(0, rgba(B.color, 0)); gr.addColorStop(0.2, rgba(B.color, 0.55)); gr.addColorStop(0.8, rgba(B.color, 0.55)); gr.addColorStop(1, rgba(B.color, 0));
+    ctx.fillStyle = gr; ctx.fill();
+    fitFont(ctx, B.text, 440, 44, 900, 'italic');
+    const tg = ctx.createLinearGradient(0, -36, 0, 4);
+    tg.addColorStop(0, '#FFFFFF'); tg.addColorStop(1, lighten(B.color, 0.55));
+    catchText(ctx, B.text, 0, -12, tg, 7);
+    fitFont(ctx, B.sub, 420, 17, 800, 'italic');
+    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(20,10,30,0.7)'; ctx.strokeText(B.sub, 0, 26);
+    ctx.fillStyle = '#FFFFFF'; ctx.fillText(B.sub, 0, 26);
+  }
+  ctx.restore();
+}
+
+// The winner (or the escapees at 0:00), big, in a golden spotlight.
+function drawWinner(B) {
+  const final = B.kind === 'final';
+  const faces = final ? B.faces : [B.face];
+  const age = final ? (B.age += 0) || 0 : 0;
+  const y = sy(165);
+  ctx.save();
+  const gl = ctx.createRadialGradient(L.acx, y, 0, L.acx, y, 190);
+  gl.addColorStop(0, 'rgba(255,230,150,0.55)'); gl.addColorStop(1, 'rgba(255,230,150,0)');
+  ctx.fillStyle = gl; circ(ctx, L.acx, y, 190); ctx.fill();
+  ctx.translate(L.acx, y);
+  ctx.save(); ctx.rotate(S.time * 0.4);
+  ctx.fillStyle = 'rgba(255,240,190,0.16)';
+  for (let i = 0; i < 12; i++) { ctx.rotate(TAU / 12); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-16, -170); ctx.lineTo(16, -170); ctx.closePath(); ctx.fill(); }
+  ctx.restore();
+  const r = faces.length > 1 ? 30 : 46;
+  faces.forEach((def, i) => {
+    const x = (i - (faces.length - 1) / 2) * r * 2.4;
+    const sp = getSprite(def.id, r);
+    ctx.save(); ctx.translate(x, Math.sin(S.time * 3 + i) * 4); ctx.rotate(Math.sin(S.time * 2 + i) * 0.1);
+    ctx.drawImage(sp.canvas, -sp.size / 2, -sp.size / 2, sp.size, sp.size);
+    ctx.restore();
+    if (faces.length === 1) drawCrown(x, -r - 18 + Math.sin(S.time * 3) * 4, 2);
+  });
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const title = final ? (faces.length === 1 ? 'NEVER CAUGHT!' : `${faces.length} ESCAPED!`) : B.text;
+  fitFont(ctx, title, 460, 50, 900, 'italic');
+  const tg = ctx.createLinearGradient(0, r + 18, 0, r + 62);
+  tg.addColorStop(0, '#FFE57A'); tg.addColorStop(1, '#FF8A3D');
+  catchText(ctx, title, 0, r + 42, tg, 8);
+  const sub = faces.map(d => d.name.toUpperCase()).join(' & ');
+  fitFont(ctx, sub, 440, 30, 900, 'italic');
+  catchText(ctx, sub, 0, r + 86, '#FFFFFF', 6);
+  ctx.restore();
+}
+
+function draw() {
+  if (!canvas.width || !canvas.height || !scenery) return;   // page not laid out yet
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const d = dusk();
+  ctx.drawImage(scenery.sky, 0, 0);
+  if (d > 0) { ctx.globalAlpha = d; ctx.drawImage(scenery.skyDusk, 0, 0); ctx.globalAlpha = 1; }
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  const [sunX, sunY] = drawSun();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(scenery.land, 0, 0);
+  if (d > 0) { ctx.globalAlpha = d; ctx.drawImage(scenery.landDusk, 0, 0); ctx.globalAlpha = 1; }
+
+  const shx = S.shake ? rand(-1, 1) * S.shake : 0, shy = S.shake ? rand(-1, 1) * S.shake : 0;
+  ctx.setTransform(scale, 0, 0, scale, shx * scale, shy * scale);
+  drawLampGlow();
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, L.stripY + 22, LW, L.panelBottom - L.stripY - 22); ctx.clip();
+  drawBerries();
+  drawRings();
+  for (const m of S.mons) if (m.def.id === 'snorlax') drawMon(m);
+  for (const m of S.mons) if (m.def.id !== 'snorlax') drawMon(m);
+  for (const b of S.balls) drawBall(b);
+  if (S.rocket) drawRocket(S.rocket);
+  drawLockOn();
+  drawFx();
+  ctx.restore();
+
+  // Lens flare, film grain and the camera overlay on top
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  drawFlare(sunX, sunY);
+  const gs = 128 / scale * 1.5;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, L.panelTop, LW, L.panelBottom - L.panelTop); ctx.clip();
+  const ox = -Math.random() * gs, oy = -Math.random() * gs;
+  for (let gx = ox; gx < LW; gx += gs) for (let gy = L.panelTop + oy; gy < L.panelBottom; gy += gs) ctx.drawImage(scenery.grain, gx, gy, gs, gs);
+  ctx.restore();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(scenery.overlay, 0, 0);
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+
+  drawStrip();
+  drawHud();
+  if (S.flash > 0) {
+    ctx.fillStyle = `rgba(255,250,235,${S.flash})`;
+    ctx.fillRect(-20, -20, LW + 40, LH + 40);
+  }
+  drawBanner();
+
+  // Black bands (drawn last, unshaken, so nothing spills into TikTok's UI zones)
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, LW, L.panelTop);
+  ctx.fillRect(0, L.panelBottom, LW, LH - L.panelBottom);
+}
+
+/* =====================================================================
+   VIDEO RECORDING
+   Records one full round straight from the canvas (1080×1920, 60fps, with
+   sound), keeps going a few seconds into the freeze, then saves the file.
+   ===================================================================== */
+
+const params = new URLSearchParams(location.search);
+// ?upload=/path  → POST the finished video to this same-origin path instead of
+// downloading it (used by tools/render.py). ?autorecord → start on load.
+const UPLOAD_PATH = /^\/(?!\/)/.test(params.get('upload') || '') ? params.get('upload') : null;
+
+const Recorder = {
+  on: false, rec: null, chunks: [], tail: 0, startedAt: 0, frames: 0,
+  TAIL_SECONDS: 3.5,        // how long to keep filming the frozen end screen
+
+  // Best format this browser can record: MP4 (H.264/AAC) first, WebM fallback.
+  pickMime() {
+    const types = [
+      'video/mp4;codecs=avc1.64002A,mp4a.40.2',
+      'video/mp4;codecs=avc1,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+    return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  },
+
+  start() {
+    if (this.on) return;
+    if (!window.MediaRecorder || !canvas.captureStream) {
+      alert("This browser can't record video. Try Chrome or Safari on a computer.");
+      return;
+    }
+    Sound.unlock();
+    this.on = true;
+    resize();                 // lock the canvas to 1080×1920
+    startRound();
+    draw();
+
+    const stream = canvas.captureStream(60);
+    const audio = Sound.recordStream();
+    if (audio) audio.getAudioTracks().forEach(t => stream.addTrack(t));
+
+    const mimeType = this.pickMime();
+    const opts = { videoBitsPerSecond: 8_000_000, audioBitsPerSecond: 192_000 };
+    if (mimeType) opts.mimeType = mimeType;
+    this.rec = new MediaRecorder(stream, opts);
+    this.chunks = [];
+    this.rec.ondataavailable = e => { if (e.data.size) this.chunks.push(e.data); };
+    this.rec.onstop = () => this.save();
+    this.rec.start(1000);
+
+    this.tail = this.TAIL_SECONDS;
+    this.startedAt = performance.now();
+    this.frames = 0;
+    $('recBtn').classList.add('on');
+    $('recBtn').textContent = '⏹';
+    $('recBadge').hidden = false;
+  },
+
+  // Called every frame once the round is over: film the freeze, then stop.
+  tick(rdt) {
+    if (!this.rec) return;
+    this.tail -= rdt;
+    if (this.tail <= 0) this.stop();
+  },
+
+  stop() {
+    if (this.rec && this.rec.state !== 'inactive') this.rec.stop();
+  },
+
+  save() {
+    const type = this.rec.mimeType || 'video/webm';
+    const blob = new Blob(this.chunks, { type });
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const name = `pokemon-go-ball-rain-${stamp}.${ext}`;
+    const secs = (performance.now() - this.startedAt) / 1000;
+    const fps = (this.frames / secs).toFixed(1);
+
+    this.rec = null;
+    this.chunks = [];
+    this.on = false;
+    resize();                 // back to the normal screen layout
+    $('recBtn').classList.remove('on');
+    $('recBtn').textContent = '⏺';
+    $('recBadge').hidden = true;
+
+    if (UPLOAD_PATH) {
+      fetch(`${UPLOAD_PATH}?name=${encodeURIComponent(name)}&fps=${fps}`, { method: 'POST', body: blob });
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  },
+
+  // On-screen REC badge with elapsed time.
+  frame() {
+    if (!this.on) return;
+    this.frames++;
+    const s = Math.floor((performance.now() - this.startedAt) / 1000);
+    const text = `● REC ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    const badge = $('recBadge');
+    if (badge.textContent !== text) badge.textContent = text;
+  },
+};
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+
+$('recBtn').addEventListener('click', () => (Recorder.on ? Recorder.stop() : Recorder.start()));
+
+// Tap a Pokémon to throw a ball at it; tap anywhere else to throw one there
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (S.timeUp || S.lastStand) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width * LW;
+  const y = (e.clientY - rect.top) / rect.height * LH - L.arenaTop;
+  if (y < 0) return;
+  const m = freeMons().find(o => (o.x - x) ** 2 + (o.y - y) ** 2 < (o.r * 2) ** 2);
+  throwBall(m || null);
+});
+
+// Audio starts on load if the browser allows it. If it's blocked, any touch,
+// click or key press starts it (different browsers count different events).
+for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) {
+  window.addEventListener(ev, () => Sound.unlock(), { capture: true });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Sound.unlock(); });
+
+const muteBtn = $('muteBtn');
+function toggleMute() {
+  Sound.setMuted(!Sound.muted);
+  muteBtn.textContent = Sound.muted ? '🔇' : '🔊';
+}
+muteBtn.addEventListener('click', toggleMute);
+
+const panel = $('panel');
+$('setBtn').addEventListener('click', () => { panel.hidden = !panel.hidden; });
+$('closeBtn').addEventListener('click', () => { panel.hidden = true; });
+$('resetBtn').addEventListener('click', () => { startRound(); panel.hidden = true; });
+
+// Bind a slider to a Settings key with a formatted readout
+function bindSlider(inputId, labelId, key, fmtVal) {
+  const input = $(inputId), label = $(labelId);
+  input.value = Settings[key];
+  label.textContent = fmtVal(Settings[key]);
+  input.addEventListener('input', () => {
+    Settings[key] = parseFloat(input.value);
+    label.textContent = fmtVal(Settings[key]);
+  });
+}
+bindSlider('inThrow', 'vThrow', 'throws', v => v.toFixed(2) + '×');
+bindSlider('inMoves', 'vMoves', 'moves', v => (v ? v.toFixed(1) + '×' : 'off'));
+
+// Keyboard shortcuts for desktop recording: M = mute, R = restart the round
+window.addEventListener('keydown', e => {
+  if (e.key === 'm' || e.key === 'M') toggleMute();
+  if (e.key === 'r' || e.key === 'R') startRound();
+});
+
+window.addEventListener('resize', resize);
+
+/* =====================================================================
+   MAIN LOOP
+   ===================================================================== */
+
+resize();
+startRound();
+Sound.unlock();     // try to start sound right away
+if (params.has('autorecord')) Recorder.start();
+
+let lastT = performance.now();
+function frame(now) {
+  // Never negative (the first rAF timestamp can be earlier than lastT), capped after tab switches
+  const rdt = clamp((now - lastT) / 1000, 0, 1 / 20);
+  lastT = now;
+  try {
+    update(rdt);
+    draw();
+  } catch (err) {
+    console.error(err);     // log it (render.py prints these) but keep the loop alive
+  }
+  Recorder.frame();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

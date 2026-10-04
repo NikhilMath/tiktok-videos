@@ -1,0 +1,2016 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Pokémon GO Raid: Will They Beat Mewtwo in Time?</title>
+<style>
+  /* ---------- Page shell: black, no scrolling, stage centered ---------- */
+  html, body {
+    margin: 0; height: 100%; background: #000; overflow: hidden;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+
+  /* The stage is sized by JS to a 9:16 (or taller) portrait box.
+     --u = CSS pixels per logical unit (logical width is 540). */
+  #stage { position: relative; --u: 1px; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  /* ---------- Recording indicator (on screen only, not in the video) ---------- */
+  #recBadge {
+    position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + var(--u) * 14);
+    transform: translateX(-50%); padding: calc(var(--u) * 6) calc(var(--u) * 14);
+    border-radius: 999px; background: rgba(230, 57, 70, 0.92); color: #fff;
+    font: 800 calc(var(--u) * 14) system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: 0.08em; pointer-events: none;
+  }
+  #recBadge[hidden] { display: none; }
+
+  /* ---------- Buttons (record / mute / settings), raid style ---------- */
+  #btns {
+    position: absolute;
+    right: calc(var(--u) * 12);
+    top: calc(env(safe-area-inset-top, 0px) + var(--u) * 10);
+    display: flex; gap: calc(var(--u) * 8);
+  }
+  .iconBtn {
+    width: calc(var(--u) * 38); height: calc(var(--u) * 38);
+    border-radius: 50%; border: 2px solid #F06BC8;
+    background: #2A1240; color: #fff; cursor: pointer;
+    font-size: calc(var(--u) * 16); line-height: 1; padding: 0;
+    box-shadow: 0 0 calc(var(--u) * 10) rgba(240, 107, 200, 0.6);
+  }
+  #recBtn.on { background: #E63946; }
+
+  /* ---------- Settings panel ---------- */
+  #panel {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: calc(var(--u) * 380); padding: calc(var(--u) * 20);
+    background: linear-gradient(#3A1A5C, #1E0C34); border: 2px solid #F06BC8;
+    border-radius: calc(var(--u) * 20); color: #fff;
+    box-shadow: 0 0 calc(var(--u) * 30) rgba(240, 107, 200, 0.5);
+    font: 700 calc(var(--u) * 15) Futura, "Avenir Next", system-ui, sans-serif;
+  }
+  #panel[hidden] { display: none; }
+  #panel h2 { margin: 0 0 calc(var(--u) * 14); font-size: calc(var(--u) * 22); text-align: center; letter-spacing: 0.12em; }
+  #panel label { display: block; margin-bottom: calc(var(--u) * 14); }
+  #panel label span { float: right; color: #FFD23F; }
+  #panel input[type=range] { width: 100%; margin-top: calc(var(--u) * 6); accent-color: #F06BC8; }
+  .row { display: flex; gap: calc(var(--u) * 10); margin-top: calc(var(--u) * 6); }
+  .row button {
+    flex: 1; padding: calc(var(--u) * 10); cursor: pointer; border-radius: 999px; border: none;
+    font: 800 calc(var(--u) * 14) Futura, "Avenir Next", system-ui, sans-serif; letter-spacing: 0.08em;
+    color: #FFFFFF; background: linear-gradient(90deg, #B03FE0, #F06BC8);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="recBadge" hidden>● REC 0:00</div>
+
+  <div id="btns">
+    <button class="iconBtn" id="recBtn" aria-label="Record a video">⏺</button>
+    <button class="iconBtn" id="muteBtn" aria-label="Toggle sound">🔊</button>
+    <button class="iconBtn" id="setBtn" aria-label="Settings">⚙️</button>
+  </div>
+
+  <div id="panel" hidden>
+    <h2>SETTINGS</h2>
+    <label>Boss HP <span id="vHp"></span>
+      <input id="inHp" type="range" min="0.5" max="1.5" step="0.05">
+    </label>
+    <label>Boss attack power <span id="vPow"></span>
+      <input id="inPow" type="range" min="0.5" max="2" step="0.05">
+    </label>
+    <div class="row">
+      <button id="resetBtn">RESTART</button>
+      <button id="closeBtn">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   CONFIG
+   ===================================================================== */
+
+const TAU = Math.PI * 2;
+const FONT = 'Futura, "Futura PT", "Avenir Next Condensed", "Avenir Next", "Trebuchet MS", system-ui, sans-serif';
+const INK = '#1C0F2A';        // outlines (deep violet)
+
+// Length of one round. When the clock hits 0:00 everything freezes in place.
+// Here it's the raid timer: beat the boss before it runs out.
+const ROUND_SECONDS = 120;   // 2:00
+
+// Solid black bands at the top and bottom so TikTok's UI never covers the
+// action: 220px on top, ~285px at the bottom of the 1920px video.
+const TOP_SPACE = 110;
+const BOTTOM_SPACE = 142;
+
+// The hook: a comment prompt + question at the top for retention.
+const HOOK = ['Comment below 👇', 'Will they BEAT', 'MEWTWO in time?'];
+
+/* The raid squad: Pokémon trainers bring to a Mewtwo raid, drawn in code (see
+   FACES). eff = how well their attacks hit a Psychic type (Dark, Ghost and Bug
+   are super effective, Fighting is not very effective). */
+const SQUAD = [
+  { id: 'tyranitar', name: 'Tyranitar', eff: 1.6,   atk: 1.1,  hp: 120, alert: 0.45, charged: 'CRUNCH!',        color: '#7FB062', proj: '#5A2E7A' },
+  { id: 'gengar',    name: 'Gengar',    eff: 1.6,   atk: 1.15, hp: 80,  alert: 0.6,  charged: 'SHADOW BALL!',   color: '#8E6BD0', proj: '#6A3FC4' },
+  { id: 'pikachu',   name: 'Pikachu',   eff: 1.0,   atk: 0.9,  hp: 70,  alert: 0.7,  charged: 'THUNDERBOLT!',   color: '#FFD83A', proj: '#FFE34A' },
+  { id: 'charizard', name: 'Charizard', eff: 1.0,   atk: 1.1,  hp: 100, alert: 0.5,  charged: 'BLAST BURN!',    color: '#FF8A3D', proj: '#FF7A2A' },
+  { id: 'machamp',   name: 'Machamp',   eff: 0.625, atk: 1.2,  hp: 110, alert: 0.4,  charged: 'DYNAMIC PUNCH!', color: '#9AAFC4', proj: '#E8B07A' },
+  { id: 'lucario',   name: 'Lucario',   eff: 1.0,   atk: 1.1,  hp: 90,  alert: 0.6,  charged: 'AURA SPHERE!',   color: '#4F8FD6', proj: '#6CC8FF' },
+  { id: 'umbreon',   name: 'Umbreon',   eff: 1.6,   atk: 0.75, hp: 150, alert: 0.5,  charged: 'FOUL PLAY!',     color: '#4A4A5E', proj: '#3A2050' },
+  { id: 'snorlax',   name: 'Snorlax',   eff: 1.0,   atk: 0.9,  hp: 170, alert: 0.2,  charged: 'HYPER BEAM!',    color: '#4E8295', proj: '#FFF2A8' },
+  { id: 'dragonite', name: 'Dragonite', eff: 1.0,   atk: 1.1,  hp: 110, alert: 0.45, charged: 'OUTRAGE!',       color: '#F2A64A', proj: '#7A5AE0' },
+  { id: 'garchomp',  name: 'Garchomp',  eff: 1.0,   atk: 1.15, hp: 110, alert: 0.5,  charged: 'EARTH POWER!',   color: '#4A6AB8', proj: '#B07A3A' },
+  { id: 'metagross', name: 'Metagross', eff: 1.3,   atk: 1.05, hp: 120, alert: 0.35, charged: 'METEOR MASH!',   color: '#6A9BD0', proj: '#D9E6F2' },
+  { id: 'scizor',    name: 'Scizor',    eff: 1.6,   atk: 0.95, hp: 100, alert: 0.55, charged: 'X-SCISSOR!',     color: '#E0454A', proj: '#8FD14F' },
+];
+const MEGA = { id: 'megagengar', name: 'Mega Gengar', eff: 1.6, atk: 2.4, hp: 999, alert: 1, charged: 'SHADOW BALL!', color: '#6A3FB0', proj: '#B05AF0', mega: true };
+
+/* Where things are, in a 540×960 block (shifted down on taller phones). */
+const BOSS_X = 245, BOSS_Y = 452;                       // Mewtwo's chest
+const PX = 245, PY = 690, PRX = 212, PRY = 86;          // the raid platform (an ellipse)
+const ARENA_TOP = TOP_SPACE + 180;
+
+// User-tweakable settings (bound to the sliders).
+const Settings = { hp: 1, power: 1 };
+
+/* Tuning knobs, chosen by simulating many rounds in the console (README →
+   "Tune the pacing by simulation"). A hidden rubber band keeps the boss's HP
+   near a schedule that empties at about 0:00, then switches off for the last
+   few seconds so the finish is a genuine coin flip. */
+const TUNING = {
+  bossHp: 36000, fastDmg: 8, chargedDmg: 70, energyGain: 14, fireGap: [0.55, 0.85],
+  slots: 12, extraTrainers: 3, rejoin: 3.5,
+  shadowDmg: 42, ringDmg: 26, psystrikeDmg: 95, bossGap: [2.0, 2.8], enragedGap: [1.4, 2.0],
+  planEnd: 126, bandK: 3.0, bandOff: 8, recover: 0.06,
+};
+
+/* =====================================================================
+   CANVAS, SIZING & LAYOUT
+   ===================================================================== */
+
+const stage = document.getElementById('stage');
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const LW = 540;   // logical width; everything is laid out in these units
+let LH = 960;     // logical height (grows on phones taller than 9:16)
+let scale = 1;    // device pixels per logical unit
+const L = {};     // layout
+
+function layout() {
+  const block = (LH - 960) / 2;
+  L.block = block;
+  L.cx = LW / 2;
+  L.panelTop = block + TOP_SPACE;
+  L.panelBottom = block + 960 - BOTTOM_SPACE;
+  L.hudY = L.panelTop + 24;           // raid timer (left), trainers (right), "Comment below" (middle)
+  L.title2 = L.panelTop + 66;         // hook: big lines
+  L.title3 = L.panelTop + 110;
+  L.barY = L.panelTop + 156;          // the boss's HP bar
+}
+
+const VIDEO_W = 1080;   // recorded video is 1080×1920 (TikTok's native size)
+
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  let cssW, cssH;
+  if (Recorder.on) {                  // recording: exact 9:16 frame, fitted to the window
+    cssH = Math.min(wh, ww * 16 / 9); cssW = cssH * 9 / 16; LH = 960;
+  } else if (wh / ww >= 16 / 9) {     // tall phone: fill the whole screen
+    cssW = ww; cssH = wh; LH = LW * wh / ww;
+  } else {                            // wider screen: 9:16 box, letterboxed in black
+    cssH = wh; cssW = wh * 9 / 16; LH = 960;
+  }
+  stage.style.width = cssW + 'px';
+  stage.style.height = cssH + 'px';
+  stage.style.setProperty('--u', (cssW / LW) + 'px');
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);   // cap for phone performance
+  scale = Recorder.on ? VIDEO_W / LW : (cssW / LW) * dpr;
+  canvas.width = Math.round(LW * scale);
+  canvas.height = Math.round(LH * scale);
+  layout();
+
+  sprites.clear();                    // everything cached is drawn at device resolution
+  buildBackdrop();
+}
+
+/* =====================================================================
+   HELPERS
+   ===================================================================== */
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[(Math.random() * arr.length) | 0];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+// Overshooting pop-in. Exactly 0 at the start: float rounding would otherwise give a
+// tiny negative number, and a negative arc/gradient radius throws and stops the loop.
+const easeOutBack = t => (t <= 0 ? 0 : 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2));
+const blur = px => px * scale;      // shadowBlur ignores the canvas transform
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+// Colors: mix two #rrggbb colors (t = 0 → a, 1 → b).
+function mix(a, b, t) {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = s => Math.round(lerp((pa >> s) & 255, (pb >> s) & 255, t));
+  return '#' + ((1 << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).slice(1);
+}
+const lighten = (c, t) => mix(c, '#FFFFFF', t);
+const darken = (c, t) => mix(c, '#000000', t);
+function rgba(hex, a) { const p = parseInt(hex.slice(1), 16); return `rgba(${(p >> 16) & 255},${(p >> 8) & 255},${p & 255},${a})`; }
+
+// Set a font that fits `text` into maxW, starting from maxSize.
+function fitFont(g, text, maxW, maxSize, weight = 700, style = '') {
+  let size = maxSize;
+  g.font = `${style} ${weight} ${size}px ${FONT}`;
+  const w = g.measureText(text).width;
+  if (w > maxW) {
+    size = Math.max(5, size * maxW / w);
+    g.font = `${style} ${weight} ${size}px ${FONT}`;
+  }
+  return size;
+}
+
+function roundRect(g, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+
+// Boss-fight lettering: dark outline, glow, then the fill.
+function raidText(g, text, x, y, fill, glow = '#F06BC8', ow = 7) {
+  g.lineJoin = 'round';
+  g.save();
+  g.shadowColor = glow; g.shadowBlur = blur(12);
+  g.lineWidth = ow; g.strokeStyle = INK; g.strokeText(text, x, y);
+  g.restore();
+  g.lineWidth = ow; g.strokeStyle = INK; g.strokeText(text, x, y);
+  g.fillStyle = fill; g.fillText(text, x, y);
+}
+
+function seeded(seed) {
+  let s = seed;
+  return () => (s = (s * 16807) % 2147483647) / 2147483647;
+}
+
+// Is a floor point inside the platform? (k shrinks the ellipse)
+const onPlatform = (x, y, k = 1) => ((x - PX) / (PRX * k)) ** 2 + ((y - PY) / (PRY * k)) ** 2 <= 1;
+const platformR = (x, y) => Math.hypot((x - PX) / PRX, (y - PY) / PRY);   // 0 = center, 1 = rim
+function platformSpot(k = 0.8) {
+  const a = rand(0, TAU), d = Math.sqrt(Math.random()) * k;
+  return [PX + Math.cos(a) * PRX * d, PY + Math.sin(a) * PRY * d];
+}
+// Things further back on the platform are drawn a little smaller.
+const depth = y => 0.82 + 0.18 * clamp((y - (PY - PRY)) / (2 * PRY), 0, 1);
+
+/* =====================================================================
+   SOUND (Web Audio, synthesized: a driving raid theme, hits, booms, roars)
+   ===================================================================== */
+
+// A minor, 140 bpm: A – F – G – E
+const RAID_CHORDS = [
+  [55, [220, 261.63, 329.63]], [43.65, [174.61, 220, 261.63]],
+  [49, [196, 246.94, 293.66]], [41.2, [164.81, 207.65, 246.94]],
+];
+const SIXTEENTH = 60 / 140 / 4;
+
+const Sound = {
+  ctx: null, out: null, comp: null, speaker: null, recDest: null, noise: null,
+  muted: false, last: {}, musicNext: 0, musicStep: 0,
+
+  // Called on page load (starts immediately where the browser allows autoplay)
+  // and again on every interaction, so audio starts the moment it's permitted.
+  // Graph: sounds → out → compressor → speaker (mute switch) → speakers
+  //                                  ↘ recDest (video recording, ignores mute)
+  unlock() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      this.ctx = new AC();
+      this.comp = this.ctx.createDynamicsCompressor();
+      this.out = this.ctx.createGain();
+      this.out.gain.value = 1.2;
+      this.speaker = this.ctx.createGain();
+      this.speaker.gain.value = this.muted ? 0 : 1;
+      this.out.connect(this.comp);
+      this.comp.connect(this.speaker);
+      this.speaker.connect(this.ctx.destination);
+      const len = this.ctx.sampleRate;
+      this.noise = this.ctx.createBuffer(1, len, len);
+      const d = this.noise.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    // 'suspended' = blocked by autoplay rules; 'interrupted' = iOS paused it (e.g. a call)
+    if (this.ctx.state !== 'running' && this.ctx.state !== 'closed') this.ctx.resume().catch(() => {});
+  },
+
+  // Audio stream for the video recorder (sound is recorded even when muted).
+  recordStream() {
+    if (!this.ctx || !this.ctx.createMediaStreamDestination) return null;
+    if (!this.recDest) {
+      this.recDest = this.ctx.createMediaStreamDestination();
+      this.comp.connect(this.recDest);
+    }
+    return this.recDest.stream;
+  },
+
+  get running() { return !!this.ctx && this.ctx.state === 'running'; },
+
+  setMuted(m) {
+    this.muted = m;
+    if (this.speaker) this.speaker.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.02);
+  },
+
+  get ready() { return this.running && (!this.muted || Recorder.on); },
+
+  // Rate limit: true if this sound played less than `gap` seconds ago.
+  busy(key, gap) {
+    const now = this.ctx.currentTime;
+    if (now - (this.last[key] || 0) < gap) return true;
+    this.last[key] = now;
+    return false;
+  },
+
+  note(freq, when, dur, type = 'sine', vol = 0.2, freqTo = 0) {
+    const c = this.ctx, t = c.currentTime + when;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t);
+    if (freqTo) o.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.out);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+
+  // Filtered noise. attack > 0 fades in, otherwise it hits instantly.
+  burst(dur, freq, q, vol, freqTo = 0, when = 0, attack = 0, type = 'bandpass') {
+    const c = this.ctx, t = c.currentTime + when;
+    const src = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    src.buffer = this.noise;
+    src.loop = dur > 0.9;
+    f.type = type;
+    f.frequency.setValueAtTime(freq, t);
+    if (freqTo) f.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    f.Q.value = q;
+    if (attack > 0) {
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + attack);
+    } else {
+      g.gain.setValueAtTime(vol, t);
+    }
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(this.out);
+    src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.05);
+  },
+
+  // Brassy stab: detuned sawtooths through a low-pass filter.
+  brass(freqs, when, dur, vol = 0.03) {
+    const c = this.ctx, t = c.currentTime + when;
+    const f = c.createBiquadFilter(), g = c.createGain();
+    f.type = 'lowpass'; f.Q.value = 1;
+    f.frequency.setValueAtTime(600, t); f.frequency.exponentialRampToValueAtTime(2600, t + 0.08); f.frequency.exponentialRampToValueAtTime(900, t + dur);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.03); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    f.connect(g); g.connect(this.out);
+    for (const fr of freqs) for (const det of [-6, 6]) {
+      const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.value = fr; o.detune.value = det;
+      o.connect(f); o.start(t); o.stop(t + dur + 0.05);
+    }
+  },
+
+  // Background: a driving raid theme. Pumping bass, timpani booms, snare,
+  // brass stabs every bar; hi-hats join in the last 30 seconds.
+  music() {
+    if (!this.ready) { this.musicNext = 0; return; }
+    const now = this.ctx.currentTime;
+    if (this.musicNext < now) this.musicNext = now + 0.05;
+    while (this.musicNext < now + 0.15) {
+      const k = this.musicStep++, bar = RAID_CHORDS[Math.floor(k / 16) % RAID_CHORDS.length], e = k % 16;
+      const when = this.musicNext - now;
+      if (e % 2 === 0) this.note(e % 4 === 0 ? bar[0] : bar[0] * 2, when, 0.12, 'sawtooth', 0.05);
+      if (e === 0 || e === 8) this.note(80, when, 0.35, 'sine', 0.42, 42);                       // timpani
+      if (e === 4 || e === 12) this.burst(0.14, 1800, 0.7, 0.13, 0, when);                       // snare
+      if (e === 0) this.brass(bar[1], when, 0.5, 0.022);
+      if (e === 10) this.brass(bar[1].map(f => f * 2), when, 0.18, 0.012);
+      if (S.clock < 30 && e % 2 === 1) this.burst(0.03, 9000, 1, 0.03, 0, when, 0, 'highpass');
+      this.musicNext += SIXTEENTH;
+    }
+  },
+
+  fast() {
+    if (!this.ready || this.busy('fast', 0.05)) return;
+    this.note(rand(500, 900), 0, 0.06, 'square', 0.025, 200);
+    this.burst(0.05, 2500, 1.5, 0.05);
+  },
+  charged(eff) {
+    if (!this.ready || this.busy('charged', 0.08)) return;
+    this.burst(0.35, 1400, 0.7, 0.3, 200);
+    this.note(110, 0, 0.3, 'sine', 0.4, 50);
+    if (eff > 1) [1568, 2093].forEach((f, i) => this.note(f, 0.05 + i * 0.06, 0.25, 'triangle', 0.07));
+  },
+  bossCast() {
+    if (!this.ready) return;
+    this.note(160, 0, 0.6, 'sawtooth', 0.06, 90);
+    this.burst(0.6, 800, 2, 0.12, 2400, 0, 0.3);
+  },
+  shadowHit() {
+    if (!this.ready || this.busy('shadowHit', 0.06)) return;
+    this.note(90, 0, 0.35, 'sine', 0.35, 40);
+    this.burst(0.3, 600, 0.8, 0.25, 150);
+  },
+  ring() {
+    if (!this.ready) return;
+    this.note(220, 0, 1.0, 'sine', 0.12, 110);
+    this.burst(1.0, 300, 1, 0.15, 2000, 0, 0.1);
+  },
+  psystrike() {
+    if (!this.ready) return;
+    this.burst(1.0, 200, 0.6, 0.5, 60);
+    this.note(55, 0, 1.0, 'sine', 0.6, 30);
+    [880, 1318.5, 1760].forEach((f, i) => this.note(f, i * 0.04, 0.6, 'sine', 0.05, f * 0.5));
+  },
+  warn() {
+    if (!this.ready || this.busy('warn', 0.2)) return;
+    this.note(880, 0, 0.12, 'square', 0.04); this.note(880, 0.16, 0.12, 'square', 0.04);
+  },
+  faint() {
+    if (!this.ready || this.busy('faint', 0.1)) return;
+    this.note(600, 0, 0.4, 'square', 0.04, 120);
+  },
+  join() {
+    if (!this.ready || this.busy('join', 0.1)) return;
+    this.note(400, 0, 0.2, 'sine', 0.08, 1200);
+    this.burst(0.2, 3000, 1, 0.06, 6000);
+  },
+  roar() {
+    if (!this.ready) return;
+    this.burst(1.6, 400, 0.5, 0.45, 120, 0, 0.15, 'lowpass');
+    this.note(110, 0, 1.4, 'sawtooth', 0.12, 70);
+    this.note(165, 0, 1.4, 'sawtooth', 0.06, 100);
+  },
+  barrier() {
+    if (!this.ready) return;
+    [2093, 2637, 3136, 2637].forEach((f, i) => this.note(f, i * 0.05, 0.6, 'sine', 0.05));
+    this.burst(0.5, 5000, 2, 0.1, 8000);
+  },
+  heal() {
+    if (!this.ready) return;
+    [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => this.note(f, i * 0.08, 0.5, 'triangle', 0.05));
+  },
+  teleport() {
+    if (!this.ready) return;
+    this.note(300, 0, 0.3, 'sine', 0.1, 2400);
+    this.note(2400, 0.35, 0.3, 'sine', 0.08, 300);
+  },
+  // Good news for the raiders: a bright brass fanfare.
+  boost() {
+    if (!this.ready) return;
+    this.brass([523.25, 659.25, 783.99], 0, 0.25, 0.04);
+    this.brass([587.33, 739.99, 880], 0.18, 0.5, 0.04);
+  },
+  // Bad news: a low, dark hit.
+  threat() {
+    if (!this.ready) return;
+    this.brass([110, 130.81, 155.56], 0, 0.9, 0.05);
+    this.note(55, 0, 1, 'sine', 0.4, 35);
+  },
+  tick() {
+    if (!this.ready) return;
+    this.note(1250, 0, 0.06, 'triangle', 0.15);
+    this.burst(0.04, 2400, 6, 0.2);
+  },
+  win() {
+    if (!this.ready) return;
+    this.burst(1.0, 300, 0.6, 0.5, 60);
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => this.brass([f, f * 1.25], 0.3 + i * 0.12, 0.35, 0.04));
+    this.brass([523.25, 659.25, 783.99, 1046.5], 0.8, 2.2, 0.05);
+    this.burst(1.4, 6000, 0.7, 0.12, 2500, 0.8);
+  },
+  fail() {
+    if (!this.ready) return;
+    this.roar();
+    [[392, 0.6], [369.99, 0.9], [349.23, 1.2], [329.63, 1.5]].forEach(([f, w]) => this.brass([f / 2, f * 0.6], w, 0.5, 0.04));
+  },
+};
+
+/* =====================================================================
+   SIMULATION STATE
+   ===================================================================== */
+
+const S = {
+  boss: null, squad: [], slots: [], shots: [], hazards: [], fx: [],
+  boosts: [], banner: null, flash: 0, shake: 0, bolt: 0,
+  events: [], nextEvent: 0, lastSide: 'boss', raiderDeck: [], bossDeck: [], finalDone: false,
+  won: false, wonAt: 0, bestCombo: 0,
+  clock: ROUND_SECONDS, lastTick: 0, timeUp: false,
+  time: 0, roundT: 0,
+};
+
+function makeAttacker(def, slot) {
+  const [x, y] = platformSpot(def.mega ? 0.3 : 0.75);
+  return { def, slot, x, y: def.mega ? PY + 40 : y, tx: x, ty: y, hp: def.hp, maxHp: def.hp,
+           energy: rand(0, 70), fireT: rand(0.2, 0.9), hop: 0, hopV: 0, sprintT: 0, wanderT: rand(0.5, 2),
+           state: 'drop', dropT: 0, faintT: 0, hurtT: 0, face: x < BOSS_X ? 1 : -1, r: def.mega ? 30 : 19,
+           life: def.mega ? 15 : 0, rings: new Set() };
+}
+
+const active = () => S.squad.filter(a => a.state === 'in');
+const hpFrac = () => Math.max(0, S.boss.hp) / S.boss.maxHp;
+
+// Fresh round: Mewtwo at full HP, 12 trainers' Pokémon on the platform.
+function startRound() {
+  const hp = TUNING.bossHp * Settings.hp;
+  S.boss = { hp, maxHp: hp, x: BOSS_X, y: BOSS_Y, hurtT: 0, barrierT: 0, healT: 0, healLeft: 0, enraged: false,
+             attackT: 2.4, castT: 0, tpT: 0, tpFrom: BOSS_X, tpTo: BOSS_X, defeatT: 0, introT: 0 };
+  S.squad = []; S.shots = []; S.hazards = []; S.fx = []; S.boosts = [];
+  S.slots = [];
+  const cast = shuffle(SQUAD.slice());
+  for (let i = 0; i < TUNING.slots; i++) addSlot(cast[i % cast.length], true);
+  S.banner = null; S.flash = 0; S.shake = 0; S.bolt = 0;
+  S.won = false; S.wonAt = 0; S.finalDone = false;
+  S.raiderDeck = shuffle(['trainers', 'mega', 'revive', 'friends', 'fog', 'razz']);
+  S.bossDeck = shuffle(['barrier', 'recover', 'psystorm', 'teleport', 'shadowstorm']);
+  S.lastSide = 'boss';
+  S.clock = Number(params.get('seconds')) || ROUND_SECONDS;   // ?seconds=10 for quick tests
+  S.lastTick = 0;
+  S.timeUp = false;
+  S.roundT = 0;
+  S.nextEvent = 8;
+  showBanner('RAID BATTLE!', 'MEWTWO appeared!', '#F06BC8', 2.2);
+  Sound.roar();
+}
+
+function addSlot(def, instant = false) {
+  const slot = { id: S.slots.length, rejoinT: 0 };
+  S.slots.push(slot);
+  const a = makeAttacker(def, slot);
+  if (instant) { a.state = 'in'; a.dropT = 1; }
+  S.squad.push(a);
+  return a;
+}
+
+/* =====================================================================
+   THE RAID: attackers fire at the boss; the boss fires back
+   ===================================================================== */
+
+// Raid-wide damage bonus: Mega boost, friendship, a hidden rubber band, …
+function boostMult(a) {
+  let m = 1;
+  for (const b of S.boosts) if (b.t > 0 && (!b.only || b.only.includes(a.def.id))) m *= b.mult;
+  return m * bandMult();
+}
+// Positive = the boss has more HP left than the schedule wants.
+function behind() {
+  const plan = clamp(1 - S.roundT / TUNING.planEnd, 0, 1);
+  return hpFrac() - plan;
+}
+// The rubber band fades out for the last few seconds.
+function bandMult() {
+  const fade = clamp((S.clock - TUNING.bandOff) / 10, 0, 1);
+  return clamp(1 + TUNING.bandK * behind() * fade, 0.5, 1.6);
+}
+
+function fire(a, charged) {
+  const tx = S.boss.x + rand(-34, 34), ty = S.boss.y + rand(-50, 50);
+  const hx = a.x, hy = a.y - a.r * depth(a.y) - a.hop;
+  const dmg = (charged ? TUNING.chargedDmg : TUNING.fastDmg) * a.def.atk * a.def.eff * boostMult(a);
+  S.shots.push({ x0: hx, y0: hy, x1: tx, y1: ty, t: 0, dur: charged ? 0.45 : rand(0.28, 0.4), big: charged, dmg, a,
+                 color: a.def.proj, arc: rand(-40, 40) - (charged ? 60 : 30) });
+  if (charged) {
+    addFloat(a.x, a.y - 52, a.def.charged, lighten(a.def.color, 0.3), 15, 1.0);
+    S.flash = Math.max(S.flash, 0.05);
+  } else Sound.fast();
+}
+
+function hitBoss(sh) {
+  const B = S.boss;
+  if (S.won || S.timeUp) return;
+  if (B.tpT > 0 && B.tpT < 0.8) { if (sh.big) addFloat(sh.x1, sh.y1 - 10, 'MISS!', '#FFFFFF', 14, 0.6); return; }
+  let dmg = sh.dmg;
+  if (B.barrierT > 0) dmg *= 0.25;
+  B.hp -= dmg;
+  if (sh.big) B.hurtT = 0.12;
+  addSparks(sh.x1, sh.y1, sh.big ? 16 : 4, [sh.color, '#FFFFFF', lighten(sh.color, 0.5)], sh.big ? 320 : 160);
+  if (sh.big) {
+    addRing(sh.x1, sh.y1, 6, 46, sh.color, 0.4, 6);
+    addFloat(sh.x1 + rand(-30, 30), sh.y1 - 20, `-${Math.round(dmg)}`, B.barrierT > 0 ? '#9FE3FF' : '#FFFFFF', 18, 0.8);
+    if (sh.a.def.eff > 1 && B.barrierT <= 0) addFloat(sh.x1, sh.y1 - 44, 'SUPER EFFECTIVE!', '#FFD23F', 14, 0.9);
+    if (sh.a.def.eff < 1) addFloat(sh.x1, sh.y1 - 44, 'Not very effective…', '#B9B0C9', 12, 0.9);
+    S.shake = Math.max(S.shake, 3);
+    Sound.charged(sh.a.def.eff);
+  }
+  if (B.hp <= 0) defeatBoss();
+}
+
+// Mewtwo's attacks: Shadow Balls at a few attackers, a psychic ring across the
+// whole platform (jump over it!), or Psystrike on the biggest crowd.
+function bossAttack() {
+  const B = S.boss;
+  const list = active();
+  if (!list.length) return;
+  const r = Math.random();
+  B.castT = 0.6;
+  if (r < 0.48) {
+    const n = (B.enraged ? 4 : 3) + (Math.random() < 0.3 ? 1 : 0);
+    for (let i = 0; i < n; i++) {
+      const t = pick(list);
+      const hand = i % 2 ? 1 : -1;
+      newHazard({ kind: 'shadow', sx: B.x + hand * 62, sy: B.y + 28, x: t.x + rand(-8, 8), y: t.y + rand(-5, 5), r: 30, t: -i * 0.18, dur: 1.0, dmg: TUNING.shadowDmg });
+    }
+    Sound.bossCast();
+  } else if (r < 0.8) {
+    newHazard({ kind: 'ring', x: PX, y: PY, t: 0, dur: 1.4, dmg: TUNING.ringDmg });
+    Sound.ring();
+  } else {
+    let best = list[0], bestN = -1;
+    for (const a of list) { const n = list.filter(o => Math.hypot((o.x - a.x), (o.y - a.y) * 2) < 80).length; if (n > bestN) { bestN = n; best = a; } }
+    psystrike(best.x, best.y);
+  }
+}
+function psystrike(x, y, r = 72) {
+  newHazard({ kind: 'psystrike', x, y, r, t: 0, dur: 1.25, dmg: TUNING.psystrikeDmg });
+  addFloat(S.boss.x, S.boss.y - 120, 'PSYSTRIKE!', '#FF8AD8', 20, 1.2);
+  Sound.bossCast(); Sound.warn();
+}
+
+// A new boss attack: Pokémon standing where it'll land may notice and get out of the way.
+function newHazard(h) {
+  h.done = false;
+  h.id = ++hazardId;
+  S.hazards.push(h);
+  if (h.kind === 'ring') return;
+  for (const a of active()) {
+    const inside = Math.hypot(a.x - h.x, (a.y - h.y) * 2.2) < h.r + 6;
+    if (!inside || Math.random() > a.def.alert) continue;
+    let dx = a.x - h.x, dy = (a.y - h.y) * 2.2;
+    if (Math.hypot(dx, dy) < 1) { dx = rand(-1, 1); dy = rand(-1, 1); }
+    const d = Math.hypot(dx, dy);
+    let tx = h.x + dx / d * (h.r + 26), ty = h.y + dy / d * (h.r + 26) / 2.2;
+    if (!onPlatform(tx, ty, 0.88)) { tx = h.x - dx / d * (h.r + 26); ty = h.y - dy / d * (h.r + 26) / 2.2; }
+    if (onPlatform(tx, ty, 0.92)) { a.tx = tx; a.ty = ty; a.sprintT = 0.9; }
+  }
+}
+
+function hurt(a, dmg) {
+  if (a.def.mega) dmg *= 0.2;
+  a.hp -= dmg * Settings.power * (S.boss.enraged ? 1.25 : 1);
+  a.hurtT = 0.25;
+  addSparks(a.x, a.y - a.r, 6, ['#FF8AD8', '#FFFFFF'], 150);
+  if (a.hp <= 0 && a.state === 'in') {
+    a.state = 'faint'; a.faintT = 0;
+    addFloat(a.x, a.y - 44, 'FAINTED', '#B9B0C9', 13, 0.8);
+    a.slot.rejoinT = TUNING.rejoin;
+    Sound.faint();
+  }
+}
+
+function updateHazards(rdt) {
+  for (const h of S.hazards) {
+    h.t += rdt;
+    if (h.t < 0 || h.done) continue;
+    if (h.kind === 'ring') {
+      const R = h.t / h.dur * 1.1;
+      for (const a of active()) {
+        const pr = platformR(a.x, a.y);
+        if (!a.rings.has(h) && R > pr - 0.16 && R < pr) {        // about to pass under them: jump?
+          a.rings.add(h);
+          if (Math.random() < a.def.alert && a.hop <= 0) a.hopV = 300;
+        }
+        if (!a.rings.has('hit' + h.id) && Math.abs(R - pr) < 0.05) {
+          a.rings.add('hit' + h.id);
+          if (a.hop < 8) hurt(a, h.dmg);
+        }
+      }
+      if (h.t >= h.dur) h.done = true;
+    } else if (h.t >= h.dur) {
+      h.done = true;
+      for (const a of active()) if (Math.hypot(a.x - h.x, (a.y - h.y) * 2.2) < h.r && a.hop < 20) hurt(a, h.dmg);
+      if (h.kind === 'shadow') {
+        addRing(h.x, h.y, 4, h.r + 14, '#8E4FE0', 0.4, 6);
+        addSparks(h.x, h.y, 12, ['#5A2E9A', '#B07AF0', '#1C0F2A'], 240);
+        Sound.shadowHit();
+      } else {
+        addRing(h.x, h.y, 10, h.r + 40, '#FF8AD8', 0.6, 10);
+        addSparks(h.x, h.y, 30, ['#FF8AD8', '#FFFFFF', '#C04FE0'], 380);
+        S.shake = Math.max(S.shake, 10); S.flash = Math.max(S.flash, 0.25);
+        Sound.psystrike();
+      }
+    }
+  }
+  S.hazards = S.hazards.filter(h => !h.done || h.t < h.dur + 0.3);
+}
+
+let hazardId = 0;
+
+function updateSquad(rdt) {
+  for (const a of S.squad) {
+    a.hurtT -= rdt;
+    if (a.state === 'drop') {                          // dropping in from the sky
+      a.dropT += rdt * 2;
+      if (a.dropT >= 1) { a.state = 'in'; addRing(a.x, a.y, 4, 30, a.def.color, 0.4, 4); }
+      continue;
+    }
+    if (a.state === 'faint') { a.faintT += rdt; continue; }
+    if (a.state !== 'in') continue;
+    // hop physics
+    if (a.hop > 0 || a.hopV > 0) { a.hop += a.hopV * rdt; a.hopV -= 900 * rdt; if (a.hop <= 0) { a.hop = 0; a.hopV = 0; } }
+    // move toward the target spot
+    a.sprintT -= rdt; a.wanderT -= rdt;
+    if (a.wanderT <= 0 && a.sprintT <= 0) { a.wanderT = rand(1.5, 3.5); [a.tx, a.ty] = platformSpot(a.def.mega ? 0.3 : 0.8); }
+    const dx = a.tx - a.x, dy = a.ty - a.y, d = Math.hypot(dx, dy);
+    const sp = a.sprintT > 0 ? 190 : 55;
+    if (d > 2) { a.x += dx / d * Math.min(d, sp * rdt); a.y += dy / d * Math.min(d, sp * rdt) * 0.6; }
+    a.face = S.boss.x > a.x ? 1 : -1;
+    // attack
+    if (S.won) { if (a.hop <= 0 && Math.random() < rdt * 1.5) a.hopV = 280; continue; }
+    a.fireT -= rdt;
+    if (a.fireT <= 0) {
+      a.fireT = rand(TUNING.fireGap[0], TUNING.fireGap[1]) * (a.def.mega ? 0.6 : 1);
+      a.energy += TUNING.energyGain;
+      if (a.energy >= 100) { a.energy = 0; fire(a, true); } else fire(a, false);
+    }
+    if (a.def.mega && (a.life -= rdt) <= 0) {
+      a.state = 'gone';
+      addSparks(a.x, a.y - a.r, 20, ['#B05AF0', '#FFFFFF'], 260);
+      addFloat(a.x, a.y - 50, 'Mega Evolution ended', '#D9C2F5', 13, 1.0);
+    }
+  }
+  // fainted Pokémon disappear; their trainer sends in the next one
+  S.squad = S.squad.filter(a => !(a.state === 'faint' && a.faintT > 0.6) && a.state !== 'gone');
+  for (const slot of S.slots) {
+    if (S.squad.some(a => a.slot === slot)) continue;
+    slot.rejoinT -= rdt;
+    if (slot.rejoinT <= 0 && !S.won) {
+      const a = makeAttacker(pick(SQUAD), slot);
+      S.squad.push(a);
+      Sound.join();
+    }
+  }
+}
+
+function updateShots(rdt) {
+  for (const sh of S.shots) {
+    sh.t += rdt;
+    if (sh.t >= sh.dur && !sh.done) { sh.done = true; hitBoss(sh); }
+  }
+  S.shots = S.shots.filter(sh => !sh.done);
+}
+
+function updateBoss(rdt) {
+  const B = S.boss;
+  B.hurtT -= rdt; B.castT -= rdt; B.barrierT -= rdt; B.introT += rdt;
+  if (B.tpT > 0) {                                     // teleporting: vanish, reappear elsewhere
+    B.tpT -= rdt;
+    if (B.tpT < 0.5 && B.x !== B.tpTo) { B.x = B.tpTo; addSparks(B.x, B.y, 20, ['#FF8AD8', '#FFFFFF'], 260); }
+  } else if (!S.won) {
+    B.x = lerp(B.x, BOSS_X, 1 - Math.exp(-rdt * 0.4));
+  }
+  if (B.healLeft > 0) {                                // Recover: heals over a second and a half
+    const h = Math.min(B.healLeft, B.maxHp * TUNING.recover / 1.5 * rdt);
+    B.hp = Math.min(B.maxHp, B.hp + h); B.healLeft -= h;
+    if (Math.random() < rdt * 20) S.fx.push({ kind: 'plus', x: B.x + rand(-60, 60), y: B.y + rand(-60, 80), vy: -60, life: 0.8, max: 0.8 });
+  }
+  if (!B.enraged && hpFrac() < 0.3 && !S.won) {
+    B.enraged = true;
+    showBanner('MEWTWO IS ENRAGED!', 'Its attacks are faster and stronger', '#FF3B5C');
+    Sound.roar();
+    S.shake = 10;
+  }
+  if (S.won) { B.defeatT += rdt; return; }
+  B.attackT -= rdt;
+  if (B.attackT <= 0 && B.tpT <= 0) {
+    const gap = B.enraged ? TUNING.enragedGap : TUNING.bossGap;
+    B.attackT = rand(gap[0], gap[1]);
+    bossAttack();
+  }
+}
+
+function defeatBoss() {
+  S.won = true;
+  S.wonAt = S.clock;
+  S.boss.hp = 0;
+  S.boss.defeatT = 0;
+  S.hazards = [];
+  showBanner('RAID WON!', `Mewtwo was defeated with ${secsText(S.clock)} left!`, '#FFD23F', 999);
+  S.flash = 0.6; S.shake = 14;
+  addConfetti(90);
+  for (let i = 0; i < 3; i++) addRing(S.boss.x, S.boss.y, 20, 160 + i * 40, i ? '#FFFFFF' : '#FFD23F', 0.8 + i * 0.2, 10);
+  Sound.win();
+}
+
+/* =====================================================================
+   EVENTS: something new about every 9 seconds. When the raid is behind
+   schedule the trainers get help; when it's ahead, Mewtwo fights back.
+   ===================================================================== */
+
+function showBanner(text, sub, color, life = 2.4) {
+  S.banner = { text, sub, color, life, max: life };
+}
+
+function runEvent() {
+  const b = behind();
+  let side = b > 0.04 ? 'raiders' : b < -0.04 ? 'boss' : (S.lastSide === 'boss' ? 'raiders' : 'boss');
+  if (!S.raiderDeck.length) S.raiderDeck = shuffle(['trainers', 'mega', 'revive', 'friends', 'fog', 'razz']);
+  if (!S.bossDeck.length) S.bossDeck = shuffle(['barrier', 'recover', 'psystorm', 'teleport', 'shadowstorm']);
+  S.lastSide = side;
+  const kind = side === 'raiders' ? S.raiderDeck.shift() : S.bossDeck.shift();
+  if (!kind) return;
+  const B = S.boss;
+  switch (kind) {
+    case 'trainers': {
+      for (let i = 0; i < TUNING.extraTrainers; i++) { const a = addSlot(pick(SQUAD)); a.dropT = -i * 0.3; }
+      showBanner(`+${TUNING.extraTrainers} TRAINERS JOINED!`, `${S.slots.length} trainers in the raid`, '#5FE07A');
+      Sound.boost();
+      break;
+    }
+    case 'mega': {
+      const a = addSlot(MEGA); a.slot.mega = true;
+      S.boosts.push({ name: 'MEGA', mult: 1.25, t: 15 });
+      showBanner('MEGA GENGAR!', 'Mega boost: everyone hits 25% harder', '#B05AF0');
+      Sound.boost(); S.flash = 0.3;
+      break;
+    }
+    case 'revive': {
+      for (const slot of S.slots) slot.rejoinT = 0;
+      for (const a of S.squad) if (a.state === 'in') a.hp = a.maxHp;
+      showBanner('MAX REVIVE!', 'Every Pokémon is back at full HP', '#FFD23F');
+      Sound.heal();
+      break;
+    }
+    case 'friends':
+      S.boosts.push({ name: 'BEST FRIENDS', mult: 1.15, t: 14 });
+      showBanner('BEST FRIENDS BONUS!', 'Damage +15% for 14 seconds', '#FF7AB8');
+      for (let i = 0; i < 14; i++) S.fx.push({ kind: 'heart', x: PX + rand(-180, 180), y: PY + rand(-50, 40), vy: -rand(40, 80), life: 1.6, max: 1.6 });
+      Sound.boost();
+      break;
+    case 'fog':
+      S.boosts.push({ name: 'FOG', mult: 1.3, t: 14, only: ['tyranitar', 'gengar', 'umbreon', 'megagengar'] });
+      showBanner('WEATHER: FOG!', 'Dark and Ghost attacks boosted', '#9AA4C8');
+      S.fogT = 14;
+      Sound.boost();
+      break;
+    case 'razz':
+      for (const a of active()) a.energy = 100;
+      for (const a of active()) a.fireT = rand(0, 0.5);
+      showBanner('GOLDEN RAZZ BERRIES!', 'Every Pokémon fires its charged attack!', '#FFD23F');
+      Sound.boost();
+      break;
+    case 'barrier':
+      B.barrierT = 5;
+      showBanner('MEWTWO USED BARRIER!', 'Damage cut to a quarter for 5 seconds', '#9FE3FF');
+      Sound.barrier();
+      break;
+    case 'recover':
+      B.healLeft = B.maxHp * TUNING.recover;
+      showBanner('MEWTWO USED RECOVER!', `It heals ${Math.round(TUNING.recover * 100)}% of its HP`, '#5FE07A');
+      Sound.heal();
+      break;
+    case 'psystorm': {
+      const list = active();
+      showBanner('PSYSTRIKE STORM!', 'Three blasts at once', '#FF3B8A');
+      for (let i = 0; i < 3; i++) { const t = list.length ? pick(list) : null; if (t) psystrike(t.x, t.y, 62); }
+      Sound.threat();
+      break;
+    }
+    case 'teleport':
+      B.tpT = 1.1; B.tpFrom = B.x; B.tpTo = clamp(B.x + (Math.random() < 0.5 ? -1 : 1) * rand(60, 95), 150, 340);
+      showBanner('MEWTWO TELEPORTED!', 'Attacks in the air miss', '#C9A3FF');
+      Sound.teleport();
+      break;
+    case 'shadowstorm': {
+      const list = active();
+      for (let i = 0; i < 8 && list.length; i++) {
+        const t = pick(list);
+        newHazard({ kind: 'shadow', sx: B.x + (i % 2 ? 62 : -62), sy: B.y + 28, x: t.x + rand(-10, 10), y: t.y + rand(-6, 6), r: 30, t: -i * 0.15, dur: 1.0, dmg: TUNING.shadowDmg });
+      }
+      showBanner('SHADOW BALL STORM!', 'Mewtwo throws eight at once', '#8E4FE0');
+      Sound.threat();
+      break;
+    }
+  }
+}
+
+function finalPush() {
+  S.finalDone = true;
+  for (const a of active()) { a.energy = 100; a.fireT = rand(0, 0.6); }
+  showBanner('FINAL 10 SECONDS!', 'All-out attack!', '#FF6A3D');
+  Sound.boost();
+}
+
+/* =====================================================================
+   EFFECTS
+   ===================================================================== */
+
+function addRing(x, y, r0, r1, color, life, width) {
+  S.fx.push({ kind: 'ring', x, y, r0, r1, color, life, max: life, width });
+}
+function addSparks(x, y, count, colors, speed) {
+  for (let i = 0; i < count; i++) {
+    const a = rand(0, TAU), s = rand(speed * 0.3, speed), life = rand(0.35, 0.8);
+    S.fx.push({ kind: 'spark', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                color: pick(colors), size: rand(1.6, 3.4), life, max: life });
+  }
+}
+function addConfetti(count) {
+  const colors = ['#FFD23F', '#F06BC8', '#6CC8FF', '#7CE38B', '#FFFFFF', '#B05AF0'];
+  for (let i = 0; i < count; i++) {
+    const life = rand(1.8, 3.2);
+    S.fx.push({ kind: 'confetti', x: rand(20, 470), y: rand(ARENA_TOP - 60, ARENA_TOP + 40), vx: rand(-60, 60), vy: rand(40, 160),
+                spin: rand(-8, 8), a: rand(0, TAU), color: pick(colors), size: rand(4, 7), life, max: life });
+  }
+}
+// Floating text; stacks above any recent text at the same spot instead of overlapping it.
+function addFloat(x, y, text, color, size, life) {
+  for (let k = 0; k < 4; k++) {
+    const clash = S.fx.some(f => f.kind === 'float' && f.max - f.life < 0.5 && Math.abs(f.x - x) < 110 && Math.abs(f.y - y) < 18);
+    if (!clash) break;
+    y -= 20;
+  }
+  S.fx.push({ kind: 'float', x, y, text, color, size, life, max: life });
+}
+
+/* =====================================================================
+   UPDATE
+   ===================================================================== */
+
+function update(rdt) {
+  S.time += rdt;
+
+  // Real-time timers
+  S.flash = Math.max(0, S.flash - rdt * 2.2);
+  S.shake = Math.max(0, S.shake - rdt * 30);
+  if (S.banner && (S.banner.life -= rdt) <= 0) S.banner = null;
+  if (S.bolt > 0) S.bolt -= rdt;
+  else if (Math.random() < rdt * 0.25) S.bolt = 0.18;          // lightning in the storm
+
+  for (const f of S.fx) {
+    f.life -= rdt;
+    if (f.kind === 'spark') {
+      f.x += f.vx * rdt; f.y += f.vy * rdt;
+      f.vx *= 0.92; f.vy *= 0.92;
+    } else if (f.kind === 'confetti') {
+      f.vy = Math.min(f.vy + 120 * rdt, 170);
+      f.x += (f.vx + Math.sin(S.time * 3 + f.spin) * 30) * rdt; f.y += f.vy * rdt;
+      f.a += f.spin * rdt;
+    } else if (f.kind === 'plus' || f.kind === 'heart') {
+      f.y += f.vy * rdt;
+    }
+  }
+  S.fx = S.fx.filter(f => f.life > 0);
+
+  // Round clock (wall-clock time, so the video is exactly 2:00)
+  if (!S.timeUp) {
+    S.clock -= rdt;
+    const whole = Math.ceil(S.clock);
+    if (whole !== S.lastTick && whole <= 5 && whole > 0) Sound.tick();
+    S.lastTick = whole;
+    if (S.clock <= 0) endRound();
+    else Sound.music();
+  }
+  if (S.timeUp) { Recorder.tick(rdt); return; }   // frozen: nothing moves
+  S.roundT += rdt;
+
+  for (const b of S.boosts) b.t -= rdt;
+  S.boosts = S.boosts.filter(b => b.t > 0);
+  if (!S.won && S.roundT >= S.nextEvent && S.clock > 14) {
+    runEvent();
+    S.nextEvent = S.roundT + rand(8.6, 10);
+  }
+  if (!S.won && !S.finalDone && S.clock <= 10) finalPush();
+
+  updateBoss(rdt);
+  updateSquad(rdt);
+  updateShots(rdt);
+  updateHazards(rdt);
+}
+
+const secsText = t => { const n = Math.max(1, Math.ceil(t)); return n === 1 ? '1 second' : `${n} seconds`; };
+
+function endRound() {
+  S.clock = 0;
+  S.timeUp = true;
+  if (S.won) {
+    S.banner = { final: true, won: true, text: 'RAID WON!', sub: `with ${secsText(S.wonAt)} to spare`, color: '#FFD23F', life: 999, max: 999 };
+    S.flash = 0.3;
+  } else {
+    const p = hpFrac() * 100;
+    const pct = p < 1 ? p.toFixed(1) : String(Math.ceil(p));
+    S.banner = { final: true, won: false, text: 'RAID FAILED!', sub: `Mewtwo still had ${pct}% HP left…`, color: '#FF3B5C', life: 999, max: 999 };
+    S.flash = 0.25;
+    Sound.fail();
+  }
+}
+
+/* =====================================================================
+   CHARACTERS: every Pokémon is drawn in code (no image files). Squad faces
+   are drawn in "unit space" (head = circle of radius 1 at 0,0); Mewtwo is a
+   full figure drawn in logical units.
+   ===================================================================== */
+
+function circ(g, x, y, r) { g.beginPath(); g.arc(x, y, Math.max(0, r), 0, TAU); }
+function ell(g, x, y, rx, ry, rot = 0) { g.beginPath(); g.ellipse(x, y, Math.max(0, rx), Math.max(0, ry), rot, 0, TAU); }
+function ink(g, fill, w = 0.07) {
+  g.fillStyle = fill;
+  g.fill();
+  g.lineWidth = w;
+  g.strokeStyle = INK;
+  g.stroke();
+}
+function seg(g, x1, y1, x2, y2, w, color = INK) {
+  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2);
+  g.lineWidth = w; g.lineCap = 'round'; g.strokeStyle = color; g.stroke();
+}
+function dot(g, x, y, r, color = INK) { circ(g, x, y, r); g.fillStyle = color; g.fill(); }
+function beady(g, x, y, r) { dot(g, x, y, r); dot(g, x - r * 0.35, y - r * 0.35, r * 0.38, '#FFFFFF'); }
+function bigEye(g, x, y, rx, ry, iris) {
+  ell(g, x, y, rx, ry); ink(g, '#FFFFFF', 0.05);
+  ell(g, x + rx * 0.12, y + ry * 0.18, rx * 0.68, ry * 0.72); g.fillStyle = iris; g.fill();
+  dot(g, x + rx * 0.12, y + ry * 0.25, rx * 0.36, '#111111');
+  dot(g, x - rx * 0.12, y - ry * 0.25, rx * 0.26, '#FFFFFF');
+}
+// Narrow, fierce eye with a brow cut (s = side, -1 left / 1 right).
+function fierceEye(g, s, x, y, iris) {
+  g.save();
+  ell(g, s * x, y, 0.2, 0.14, s * 0.25); g.clip();
+  g.fillStyle = '#FFFFFF'; g.fillRect(s * x - 0.3, y - 0.3, 0.6, 0.6);
+  dot(g, s * (x - 0.03), y + 0.02, 0.09, iris);
+  dot(g, s * (x - 0.03), y + 0.02, 0.045, '#111111');
+  g.restore();
+  ell(g, s * x, y, 0.2, 0.14, s * 0.25); g.lineWidth = 0.05; g.strokeStyle = INK; g.stroke();
+  seg(g, s * (x - 0.22), y - 0.12, s * (x + 0.2), y - 0.26, 0.08);
+}
+function ballBase(g, light, dark) {
+  const gr = g.createRadialGradient(-0.35, -0.42, 0.05, 0, 0, 1.05);
+  gr.addColorStop(0, light);
+  gr.addColorStop(1, dark);
+  circ(g, 0, 0, 1); g.fillStyle = gr; g.fill();
+}
+function inside(g, fn) { g.save(); circ(g, 0, 0, 0.995); g.clip(); fn(); g.restore(); }
+// Outline + a pink raid-light rim.
+function ballDone(g) {
+  const gr = g.createRadialGradient(-0.42, -0.5, 0, -0.42, -0.5, 0.62);
+  gr.addColorStop(0, 'rgba(255,255,255,0.38)');
+  gr.addColorStop(1, 'rgba(255,255,255,0)');
+  circ(g, 0, 0, 1); g.fillStyle = gr; g.fill();
+  g.save(); circ(g, 0, 0, 1); g.clip();
+  g.lineWidth = 0.22; g.strokeStyle = 'rgba(255,120,220,0.28)'; circ(g, 0.12, 0.1, 1); g.stroke();
+  g.restore();
+  circ(g, 0, 0, 1); g.lineWidth = 0.08; g.strokeStyle = INK; g.stroke();
+}
+function smile(g, x0, x1, y, depth, w = 0.08) {
+  g.beginPath(); g.moveTo(x0, y); g.quadraticCurveTo((x0 + x1) / 2, y + depth, x1, y);
+  g.lineWidth = w; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+}
+function openMouth(g, x0, x1, y, depth, color = '#8E2430') {
+  g.beginPath(); g.moveTo(x0, y); g.quadraticCurveTo((x0 + x1) / 2, y + depth, x1, y);
+  g.quadraticCurveTo((x0 + x1) / 2, y + depth * 0.3, x0, y); g.closePath(); ink(g, color, 0.05);
+}
+function fangs(g, x0, x1, y, n, len) {
+  g.beginPath();
+  for (let i = 0; i < n; i++) {
+    const a = lerp(x0, x1, i / n), b = lerp(x0, x1, (i + 1) / n);
+    g.moveTo(a, y); g.lineTo((a + b) / 2, y + len); g.lineTo(b, y);
+  }
+  g.fillStyle = '#FFFFFF'; g.fill(); g.lineWidth = 0.03; g.strokeStyle = INK; g.stroke();
+}
+
+const FACES = {
+  tyranitar(g) {                                       // green armored kaiju, red eyes
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.55, -0.75); g.lineTo(s * 1.05, -0.95); g.lineTo(s * 0.85, -0.45); g.closePath(); ink(g, '#5A8A44');
+    }
+    g.beginPath(); g.moveTo(-0.22, -0.82); g.lineTo(0, -1.5); g.lineTo(0.22, -0.82); g.closePath(); ink(g, '#5A8A44');
+    ballBase(g, '#A9D488', '#4E7E3A');
+    inside(g, () => {
+      ell(g, 0, 0.88, 0.72, 0.4); g.fillStyle = '#C4E0A4'; g.fill();
+      g.fillStyle = '#3E6A2E';
+      for (const [x, y] of [[-0.62, -0.42], [0.62, -0.42], [0, -0.66]]) { g.beginPath(); g.moveTo(x - 0.12, y); g.lineTo(x, y - 0.18); g.lineTo(x + 0.12, y); g.closePath(); g.fill(); }
+    });
+    for (const s of [-1, 1]) fierceEye(g, s, 0.36, -0.12, '#E8423A');
+    openMouth(g, -0.48, 0.48, 0.32, 0.42);
+    fangs(g, -0.4, 0.4, 0.34, 6, 0.1);
+    ballDone(g);
+  },
+  gengar(g) {
+    g.beginPath();
+    const spikes = [[-1.0, -0.2], [-1.12, -0.55], [-0.86, -0.6], [-0.88, -1.0], [-0.55, -0.82], [-0.34, -1.18], [-0.12, -0.92],
+                    [0.12, -0.92], [0.34, -1.18], [0.55, -0.82], [0.88, -1.0], [0.86, -0.6], [1.12, -0.55], [1.0, -0.2]];
+    g.moveTo(-0.9, 0);
+    for (const [x, y] of spikes) g.lineTo(x, y);
+    g.lineTo(0.9, 0); g.closePath(); ink(g, '#7B58BE');
+    ballBase(g, '#B496E6', '#56388F');
+    for (const s of [-1, 1]) {
+      g.save(); g.translate(s * 0.36, -0.18); g.rotate(s * 0.35);
+      ell(g, 0, 0, 0.24, 0.15); ink(g, '#FF4D5E', 0.05);
+      dot(g, -s * 0.04, 0.02, 0.06, '#3A0A12');
+      g.restore();
+    }
+    g.beginPath(); g.moveTo(-0.6, 0.22); g.quadraticCurveTo(0, 0.82, 0.6, 0.22); g.quadraticCurveTo(0, 0.42, -0.6, 0.22); g.closePath(); ink(g, '#FFFFFF', 0.05);
+    g.beginPath(); g.moveTo(-0.5, 0.38); g.quadraticCurveTo(0, 0.56, 0.5, 0.38); g.lineWidth = 0.035; g.strokeStyle = INK; g.stroke();
+    ballDone(g);
+  },
+  megagengar(g) {                                      // Mega Gengar: darker, with a third eye
+    FACES.gengar(g);
+    inside(g, () => { g.fillStyle = 'rgba(40,10,70,0.35)'; g.fillRect(-1, -1, 2, 2); });
+    g.save(); g.translate(0, -0.55);
+    ell(g, 0, 0, 0.16, 0.1); ink(g, '#FFD23F', 0.04);
+    dot(g, 0, 0, 0.05, '#3A0A12');
+    g.restore();
+    circ(g, 0, 0, 1); g.lineWidth = 0.08; g.strokeStyle = INK; g.stroke();
+  },
+  pikachu(g) {
+    for (const s of [-1, 1]) {
+      g.save(); g.translate(s * 0.48, -0.62); g.rotate(s * 0.5);
+      const ear = () => { g.beginPath(); g.moveTo(-0.22, 0.2); g.quadraticCurveTo(-0.2, -0.55, 0, -1.0); g.quadraticCurveTo(0.2, -0.55, 0.22, 0.2); g.closePath(); };
+      ear(); g.fillStyle = '#FFD83A'; g.fill();
+      g.save(); ear(); g.clip(); g.fillStyle = '#26221E'; g.fillRect(-0.4, -1.1, 0.8, 0.42); g.restore();
+      ear(); g.lineWidth = 0.07; g.strokeStyle = INK; g.stroke();
+      g.restore();
+    }
+    ballBase(g, '#FFF27E', '#F2BE18');
+    for (const s of [-1, 1]) { circ(g, s * 0.62, 0.24, 0.2); g.fillStyle = '#EE4235'; g.fill(); }
+    for (const s of [-1, 1]) beady(g, s * 0.34, -0.12, 0.13);
+    dot(g, 0, 0.1, 0.04);
+    g.beginPath(); g.moveTo(-0.18, 0.2); g.quadraticCurveTo(-0.09, 0.32, 0, 0.21); g.quadraticCurveTo(0.09, 0.32, 0.18, 0.2);
+    g.lineWidth = 0.05; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+    ballDone(g);
+  },
+  charizard(g) {                                       // orange dragon, wings behind, horns
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.55, -0.3); g.lineTo(s * 1.55, -1.15); g.lineTo(s * 1.4, -0.45); g.lineTo(s * 1.6, -0.05); g.lineTo(s * 0.75, 0.35); g.closePath(); ink(g, '#F08A3A');
+      g.beginPath(); g.moveTo(s * 0.7, -0.25); g.lineTo(s * 1.38, -0.88); g.lineTo(s * 1.26, -0.42); g.lineTo(s * 1.38, -0.12); g.lineTo(s * 0.82, 0.2); g.closePath(); g.fillStyle = '#2E8A9A'; g.fill();
+      g.beginPath(); g.moveTo(s * 0.32, -0.82); g.quadraticCurveTo(s * 0.55, -1.2, s * 0.82, -1.3); g.quadraticCurveTo(s * 0.62, -1.0, s * 0.55, -0.7); g.closePath(); ink(g, '#F7C178');
+    }
+    ballBase(g, '#FFBE7A', '#E2702A');
+    inside(g, () => { ell(g, 0, 0.9, 0.75, 0.42); g.fillStyle = '#F7DFA0'; g.fill(); });
+    for (const s of [-1, 1]) fierceEye(g, s, 0.36, -0.1, '#2E8A9A');
+    g.beginPath(); g.moveTo(-0.42, 0.3); g.quadraticCurveTo(0, 0.6, 0.46, 0.22); g.quadraticCurveTo(0.05, 0.42, -0.42, 0.3); g.closePath(); ink(g, '#8E2430', 0.05);
+    ballDone(g);
+  },
+  machamp(g) {                                         // grey-blue fighter with a bony crest
+    g.beginPath(); g.moveTo(-0.6, -0.65);
+    for (const [x, y] of [[-0.45, -1.25], [-0.25, -0.85], [0, -1.35], [0.25, -0.85], [0.45, -1.25], [0.6, -0.65]]) g.lineTo(x, y);
+    g.closePath(); ink(g, '#C9D6E2');
+    ballBase(g, '#B9CCDF', '#6A7F96');
+    for (const s of [-1, 1]) fierceEye(g, s, 0.34, -0.1, '#E8423A');
+    ell(g, 0, 0.42, 0.34, 0.16); ink(g, '#E8D6A0', 0.05);
+    seg(g, -0.26, 0.42, 0.26, 0.42, 0.04);
+    ballDone(g);
+  },
+  lucario(g) {                                         // blue jackal, black mask, aura tassels
+    for (const s of [-1, 1]) {
+      for (const k of [0, 1]) {
+        g.beginPath(); g.moveTo(s * 0.62, -0.25 + k * 0.2); g.quadraticCurveTo(s * 1.15, 0.05 + k * 0.25, s * (0.95 + k * 0.1), 0.6 + k * 0.25);
+        g.quadraticCurveTo(s * 0.85, 0.2 + k * 0.2, s * 0.62, -0.05 + k * 0.2); g.closePath(); ink(g, '#22222E');
+      }
+      g.beginPath(); g.moveTo(s * 0.25, -0.8); g.lineTo(s * 0.62, -1.42); g.lineTo(s * 0.78, -0.55); g.closePath(); ink(g, '#4F8FD6');
+      g.beginPath(); g.moveTo(s * 0.38, -0.78); g.lineTo(s * 0.6, -1.2); g.lineTo(s * 0.68, -0.64); g.closePath(); g.fillStyle = '#22222E'; g.fill();
+    }
+    ballBase(g, '#7FB4EE', '#2F62B0');
+    inside(g, () => {
+      g.beginPath(); g.moveTo(-1, -0.42); g.quadraticCurveTo(0, -0.1, 1, -0.42); g.lineTo(1, 0.0); g.quadraticCurveTo(0, 0.18, -1, 0.0); g.closePath();
+      g.fillStyle = '#22222E'; g.fill();
+      ell(g, 0, 0.62, 0.55, 0.42); g.fillStyle = '#F2E0B0'; g.fill();
+    });
+    for (const s of [-1, 1]) { ell(g, s * 0.36, -0.16, 0.13, 0.09, s * 0.2); g.fillStyle = '#E8423A'; g.fill(); dot(g, s * 0.34, -0.15, 0.04, '#111111'); }
+    ell(g, 0, 0.32, 0.09, 0.06); g.fillStyle = INK; g.fill();
+    ballDone(g);
+  },
+  umbreon(g) {                                         // black, glowing yellow rings
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.3, -0.72); g.quadraticCurveTo(s * 0.8, -1.6, s * 1.1, -1.3); g.quadraticCurveTo(s * 1.0, -0.7, s * 0.82, -0.38); g.closePath(); ink(g, '#2A2A36');
+      g.save(); g.beginPath(); g.moveTo(s * 0.3, -0.72); g.quadraticCurveTo(s * 0.8, -1.6, s * 1.1, -1.3); g.quadraticCurveTo(s * 1.0, -0.7, s * 0.82, -0.38); g.closePath(); g.clip();
+      g.fillStyle = '#FFD23F'; g.fillRect(s > 0 ? 0.55 : -0.95, -1.18, 0.4, 0.13); g.restore();
+    }
+    ballBase(g, '#5A5A70', '#16161E');
+    g.beginPath(); g.arc(0, -0.58, 0.2, 0, TAU); g.lineWidth = 0.09; g.strokeStyle = '#FFD23F'; g.stroke();
+    for (const s of [-1, 1]) bigEye(g, s * 0.36, -0.06, 0.18, 0.22, '#E8423A');
+    smile(g, -0.12, 0.12, 0.34, 0.08, 0.05);
+    ballDone(g);
+  },
+  snorlax(g) {
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.3, -0.82); g.lineTo(s * 0.6, -1.17); g.lineTo(s * 0.82, -0.6); g.closePath(); ink(g, '#2F5E6E');
+    }
+    ballBase(g, '#6A9FB1', '#2C5868');
+    inside(g, () => {
+      g.beginPath(); g.moveTo(-0.85, 1); g.bezierCurveTo(-0.95, -0.2, -0.45, -0.62, 0, -0.32);
+      g.bezierCurveTo(0.45, -0.62, 0.95, -0.2, 0.85, 1); g.closePath(); g.fillStyle = '#F2E3BE'; g.fill();
+    });
+    for (const s of [-1, 1]) seg(g, s * 0.15, -0.04, s * 0.5, -0.04, 0.07);
+    g.beginPath(); g.moveTo(-0.32, 0.34); g.quadraticCurveTo(0, 0.5, 0.32, 0.34); g.lineWidth = 0.06; g.strokeStyle = INK; g.stroke();
+    for (const s of [-1, 1]) { g.beginPath(); g.moveTo(s * 0.24, 0.39); g.lineTo(s * 0.18, 0.27); g.lineTo(s * 0.12, 0.41); g.closePath(); ink(g, '#FFFFFF', 0.03); }
+    ballDone(g);
+  },
+  dragonite(g) {                                       // friendly orange dragon with antennae
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.2, -0.9); g.quadraticCurveTo(s * 0.3, -1.3, s * 0.55, -1.42); g.lineWidth = 0.07; g.strokeStyle = INK; g.stroke();
+      circ(g, s * 0.57, -1.42, 0.07); ink(g, '#F2A64A', 0.04);
+      g.beginPath(); g.moveTo(s * 0.8, -0.1); g.lineTo(s * 1.35, -0.4); g.lineTo(s * 1.25, 0.05); g.lineTo(s * 1.35, 0.3); g.lineTo(s * 0.85, 0.3); g.closePath(); ink(g, '#4FB39A');
+    }
+    ballBase(g, '#FFCE86', '#E8902E');
+    ell(g, 0, 0.38, 0.46, 0.3); ink(g, '#FBE6B0', 0.05);
+    for (const s of [-1, 1]) beady(g, s * 0.32, -0.18, 0.12);
+    for (const s of [-1, 1]) dot(g, s * 0.1, 0.26, 0.035);
+    smile(g, -0.2, 0.2, 0.46, 0.12, 0.05);
+    ballDone(g);
+  },
+  garchomp(g) {                                        // land shark with jet-fin head
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.35, -0.7); g.lineTo(s * 1.45, -0.72); g.lineTo(s * 0.92, 0.0); g.closePath(); ink(g, '#2E4A8A');
+      dot(g, s * 1.0, -0.5, 0.06, '#E8423A');
+    }
+    ballBase(g, '#6E8ED8', '#24366E');
+    inside(g, () => { ell(g, 0, 0.8, 0.95, 0.52); g.fillStyle = '#D9504A'; g.fill(); });
+    for (const s of [-1, 1]) { ell(g, s * 0.38, -0.22, 0.17, 0.11, s * 0.3); ink(g, '#FFD23F', 0.05); dot(g, s * 0.36, -0.2, 0.06, '#111111'); }
+    g.beginPath(); g.moveTo(-0.62, 0.22); g.quadraticCurveTo(0, 0.45, 0.62, 0.22); g.lineWidth = 0.06; g.strokeStyle = INK; g.stroke();
+    fangs(g, -0.55, 0.55, 0.26, 7, 0.12);
+    ballDone(g);
+  },
+  metagross(g) {                                       // steel disk with a silver X
+    ballBase(g, '#9FC4EA', '#36628F');
+    seg(g, -0.62, -0.62, 0.62, 0.62, 0.36, INK); seg(g, 0.62, -0.62, -0.62, 0.62, 0.36, INK);
+    seg(g, -0.62, -0.62, 0.62, 0.62, 0.26, '#DDE6EE'); seg(g, 0.62, -0.62, -0.62, 0.62, 0.26, '#DDE6EE');
+    for (const s of [-1, 1]) { ell(g, s * 0.5, 0.12, 0.12, 0.07, -s * 0.3); ink(g, '#E8423A', 0.04); }
+    ballDone(g);
+  },
+  scizor(g) {                                          // red steel mantis
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.12, -0.9); g.lineTo(s * 0.5, -1.4); g.lineTo(s * 0.45, -0.85); g.closePath(); ink(g, '#C42A30');
+    }
+    ballBase(g, '#FF7A7A', '#B5141A');
+    for (const s of [-1, 1]) bigEye(g, s * 0.36, -0.1, 0.2, 0.22, '#F2C21B');
+    ell(g, 0, 0.45, 0.32, 0.16); ink(g, '#4A4A52', 0.05);
+    ballDone(g);
+  },
+};
+
+/* Mewtwo, the raid boss: a full figure in logical units, chest at (0, 0). */
+function drawMewtwo(g) {
+  const body = '#E2D8EC', shade = '#A99AC4', purple = '#8E57C0', dark = INK;
+  const fill = (col, w = 2.4) => { g.fillStyle = col; g.fill(); g.lineWidth = w; g.strokeStyle = dark; g.stroke(); };
+  g.lineJoin = 'round'; g.lineCap = 'round';
+  // tail: thick purple, curling up to the right
+  g.beginPath(); g.moveTo(14, 74); g.bezierCurveTo(90, 120, 168, 60, 132, -18);
+  g.lineWidth = 30; g.strokeStyle = dark; g.stroke();
+  g.lineWidth = 24; g.strokeStyle = purple; g.stroke();
+  circ(g, 132, -20, 14); fill(purple);
+  // the tube from the back of the head to the spine
+  g.beginPath(); g.moveTo(-14, -104); g.bezierCurveTo(-62, -112, -66, -64, -30, -48);
+  g.lineWidth = 13; g.strokeStyle = dark; g.stroke();
+  g.lineWidth = 8; g.strokeStyle = shade; g.stroke();
+  // legs
+  for (const s of [-1, 1]) {
+    ell(g, s * 30, 84, 22, 34, s * 0.35); fill(body);
+    ell(g, s * 42, 128, 13, 24, s * 0.15); fill(body);
+    ell(g, s * 46, 152, 15, 8); fill(shade);
+  }
+  // torso
+  g.beginPath(); g.moveTo(-52, -36); g.quadraticCurveTo(-42, 12, -26, 56); g.quadraticCurveTo(0, 72, 26, 56); g.quadraticCurveTo(42, 12, 52, -36); g.quadraticCurveTo(0, -58, -52, -36); g.closePath();
+  const tg = g.createLinearGradient(-50, -40, 50, 60); tg.addColorStop(0, '#F4EEF8'); tg.addColorStop(1, shade);
+  fill(tg);
+  g.save(); g.clip();
+  ell(g, 0, 50, 34, 30); g.fillStyle = purple; g.fill();
+  g.restore();
+  // arms, raised a little, with three round fingers
+  for (const s of [-1, 1]) {
+    g.beginPath(); g.moveTo(s * 46, -28); g.quadraticCurveTo(s * 82, -6, s * 84, 34);
+    g.lineWidth = 17; g.strokeStyle = dark; g.stroke(); g.lineWidth = 12; g.strokeStyle = body; g.stroke();
+    for (let k = -1; k <= 1; k++) { circ(g, s * (84 + k * 6), 44 + Math.abs(k) * -2, 5.5); fill(body, 1.8); }
+  }
+  // neck + head
+  ell(g, 0, -60, 13, 14); fill(body);
+  g.beginPath(); g.moveTo(-34, -96); g.quadraticCurveTo(-36, -134, 0, -134); g.quadraticCurveTo(36, -134, 34, -96); g.quadraticCurveTo(26, -64, 0, -66); g.quadraticCurveTo(-26, -64, -34, -96); g.closePath();
+  const hg = g.createLinearGradient(-30, -134, 30, -66); hg.addColorStop(0, '#F8F4FA'); hg.addColorStop(1, '#C2B4D8');
+  // horn-ears
+  for (const s of [-1, 1]) { g.beginPath(); g.moveTo(s * 14, -128); g.quadraticCurveTo(s * 22, -152, s * 32, -146); g.quadraticCurveTo(s * 34, -128, s * 28, -116); g.closePath(); fill(body); }
+  g.beginPath(); g.moveTo(-34, -96); g.quadraticCurveTo(-36, -134, 0, -134); g.quadraticCurveTo(36, -134, 34, -96); g.quadraticCurveTo(26, -64, 0, -66); g.quadraticCurveTo(-26, -64, -34, -96); g.closePath();
+  fill(hg);
+  // stern purple eyes
+  for (const s of [-1, 1]) {
+    g.beginPath(); g.moveTo(s * 7, -100); g.quadraticCurveTo(s * 18, -108, s * 26, -104); g.quadraticCurveTo(s * 20, -94, s * 9, -95); g.closePath();
+    g.fillStyle = '#7A2FB8'; g.fill(); g.lineWidth = 1.6; g.strokeStyle = dark; g.stroke();
+    circ(g, s * 16, -100, 2.2); g.fillStyle = '#FFFFFF'; g.fill();
+    seg(g, s * 6, -108, s * 26, -114, 2.6, dark);
+  }
+  seg(g, -6, -78, 6, -78, 1.8, dark);
+}
+
+/* =====================================================================
+   RENDERING
+   ===================================================================== */
+
+const sprites = new Map();
+
+function getSprite(id, r) {
+  const key = `${id}|${r}`;
+  let s = sprites.get(key);
+  if (s) return s;
+  const size = r * 2 * 2.0;
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  g.scale(c.width / size, c.height / size);
+  g.translate(size / 2, size / 2);
+  g.scale(r, r);
+  g.lineJoin = 'round';
+  FACES[id](g);
+  s = { canvas: c, size };
+  sprites.set(key, s);
+  return s;
+}
+
+// Mewtwo, cached once (380×380 logical, chest at the center).
+function getBossSprite() {
+  let s = sprites.get('boss');
+  if (s) return s;
+  const size = 380;
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  g.scale(c.width / size, c.height / size);
+  g.translate(size / 2 - 20, size / 2 + 4);
+  drawMewtwo(g);
+  s = { canvas: c, size, ox: size / 2 - 20, oy: size / 2 + 4 };
+  sprites.set('boss', s);
+  return s;
+}
+
+/* The raid storm: a purple-magenta sky, a swirling vortex behind the boss,
+   floating crystal shards, distant spires, and the raid platform. */
+let backdrop = null, vortex = null, hookLayer = null;
+function buildBackdrop() {
+  backdrop = document.createElement('canvas');
+  backdrop.width = canvas.width;
+  backdrop.height = canvas.height;
+  const g = backdrop.getContext('2d');
+  g.scale(scale, scale);
+  g.translate(0, L.block);
+  const sky = g.createRadialGradient(BOSS_X, BOSS_Y - 40, 20, BOSS_X, BOSS_Y, 620);
+  sky.addColorStop(0, '#C23C9A'); sky.addColorStop(0.3, '#6A1E86'); sky.addColorStop(0.65, '#2A0E4A'); sky.addColorStop(1, '#0E0620');
+  g.fillStyle = sky;
+  g.fillRect(0, -L.block, LW, LH);
+  const rnd = seeded(13);
+  for (let i = 0; i < 70; i++) {                                // sparkles in the storm
+    g.fillStyle = `rgba(255,200,255,${0.2 + rnd() * 0.5})`;
+    circ(g, rnd() * LW, TOP_SPACE + rnd() * 700, 0.5 + rnd() * 1.2); g.fill();
+  }
+  // distant crystal spires on the horizon
+  for (let i = 0; i < 9; i++) {
+    const x = rnd() * LW, h = 60 + rnd() * 110, w = 16 + rnd() * 22, y = PY - 40;
+    g.beginPath(); g.moveTo(x - w / 2, y); g.lineTo(x - w * 0.2, y - h); g.lineTo(x + w * 0.1, y - h - 18); g.lineTo(x + w / 2, y); g.closePath();
+    const cg = g.createLinearGradient(x, y - h, x, y);
+    cg.addColorStop(0, 'rgba(255,140,230,0.55)'); cg.addColorStop(1, 'rgba(60,20,90,0.2)');
+    g.fillStyle = cg; g.fill();
+  }
+  // storm floor glow + the raid platform
+  const fl = g.createLinearGradient(0, PY - 120, 0, PY + 140);
+  fl.addColorStop(0, 'rgba(20,6,40,0)'); fl.addColorStop(1, 'rgba(20,6,40,0.9)');
+  g.fillStyle = fl; g.fillRect(0, PY - 120, LW, 260);
+  g.save();
+  g.shadowColor = '#F06BC8'; g.shadowBlur = blur(30);
+  ell(g, PX, PY + 12, PRX + 6, PRY + 6); g.fillStyle = '#3A1450'; g.fill();
+  g.restore();
+  ell(g, PX, PY + 12, PRX, PRY); g.fillStyle = '#2A0E3C'; g.fill();          // the platform's side
+  const top = g.createRadialGradient(PX, PY - 20, 10, PX, PY, PRX);
+  top.addColorStop(0, '#6A4A86'); top.addColorStop(1, '#3E2656');
+  ell(g, PX, PY, PRX, PRY); g.fillStyle = top; g.fill();
+  g.lineWidth = 4; g.strokeStyle = '#F06BC8'; g.stroke();
+  g.strokeStyle = 'rgba(255,170,240,0.35)'; g.lineWidth = 1.5;
+  for (const k of [0.33, 0.66]) { ell(g, PX, PY, PRX * k, PRY * k); g.stroke(); }
+  for (let i = 0; i < 12; i++) {                                // spokes
+    const a = i / 12 * TAU;
+    g.beginPath(); g.moveTo(PX + Math.cos(a) * PRX * 0.33, PY + Math.sin(a) * PRY * 0.33); g.lineTo(PX + Math.cos(a) * PRX * 0.97, PY + Math.sin(a) * PRY * 0.97); g.stroke();
+  }
+  // raid emblem in the middle (a Poké Ball outline)
+  g.save(); g.translate(PX, PY); g.scale(1, PRY / PRX);
+  g.strokeStyle = 'rgba(255,170,240,0.55)'; g.lineWidth = 3;
+  circ(g, 0, 0, 34); g.stroke(); seg(g, -34, 0, 34, 0, 3, 'rgba(255,170,240,0.55)'); circ(g, 0, 0, 10); g.stroke();
+  g.restore();
+
+  // The hook goes in its own layer, drawn over the turning vortex
+  hookLayer = document.createElement('canvas');
+  hookLayer.width = canvas.width;
+  hookLayer.height = canvas.height;
+  const hg = hookLayer.getContext('2d');
+  hg.scale(scale, scale);
+  hg.translate(0, L.block);
+  drawHook(hg);
+
+  // the vortex (rotated every frame)
+  vortex = document.createElement('canvas');
+  const vs = 520;
+  vortex.width = vortex.height = Math.ceil(vs * scale);
+  const v = vortex.getContext('2d');
+  v.scale(scale, scale); v.translate(vs / 2, vs / 2);
+  for (let arm = 0; arm < 5; arm++) {
+    v.beginPath();
+    for (let t = 0; t < 1; t += 0.01) {
+      const a = arm * TAU / 5 + t * 5.2, r = 20 + t * 240;
+      v.lineTo(Math.cos(a) * r, Math.sin(a) * r * 0.85);
+    }
+    v.lineWidth = 16; v.strokeStyle = 'rgba(255,140,230,0.10)'; v.stroke();
+    v.lineWidth = 4; v.strokeStyle = 'rgba(255,190,245,0.18)'; v.stroke();
+  }
+}
+
+function drawHook(g) {
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  const ty = L.panelTop - L.block;
+  fitFont(g, HOOK[0], 250, 17, 700);
+  roundRect(g, L.cx - 100, ty + 24 - 15, 200, 30, 15); g.fillStyle = 'rgba(20,6,40,0.7)'; g.fill();
+  g.lineWidth = 1.5; g.strokeStyle = 'rgba(240,107,200,0.7)'; g.stroke();
+  g.fillStyle = '#FFFFFF'; g.fillText(HOOK[0], L.cx, ty + 25);
+  fitFont(g, HOOK[1], 470, 46, 800);
+  raidText(g, HOOK[1], L.cx, ty + 66, '#FFFFFF', '#F06BC8', 8);
+  fitFont(g, HOOK[2], 480, 48, 800);
+  const gr = g.createLinearGradient(0, ty + 88, 0, ty + 132);
+  gr.addColorStop(0, '#FFC2F0'); gr.addColorStop(0.5, '#F06BC8'); gr.addColorStop(1, '#B03FE0');
+  raidText(g, HOOK[2], L.cx, ty + 110, gr, '#FFFFFF', 8);
+}
+
+function drawBoss() {
+  const B = S.boss;
+  const sp = getBossSprite();
+  const bob = Math.sin(S.time * 1.6) * 6;
+  let alpha = 1, k = 1;
+  if (B.tpT > 0) alpha = B.tpT > 0.8 ? clamp((1.1 - B.tpT) / 0.3, 0, 1) * -1 + 1 : B.tpT > 0.5 ? 0 : clamp((0.5 - B.tpT) / 0.4, 0, 1);
+  if (S.won) { k = Math.max(0, 1 - B.defeatT / 1.6); alpha = k; }
+  const intro = easeOutBack(clamp(B.introT / 0.8, 0, 1));
+  if (alpha <= 0 || intro <= 0) return;
+  const x = B.x, y = B.y + bob;
+  // shadow on the platform
+  ell(ctx, x, PY - PRY * 0.55, 70 * k, 14 * k); ctx.fillStyle = 'rgba(10,0,20,0.35)'; ctx.fill();
+  // psychic aura
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const pulse = 0.5 + 0.5 * Math.sin(S.time * 4);
+  const ag = ctx.createRadialGradient(x, y - 20, 20, x, y - 20, 190);
+  ag.addColorStop(0, B.enraged ? 'rgba(255,60,90,0.55)' : 'rgba(255,120,230,0.5)');
+  ag.addColorStop(1, 'rgba(255,120,230,0)');
+  ctx.fillStyle = ag; circ(ctx, x, y - 20, 190); ctx.fill();
+  ctx.strokeStyle = B.enraged ? 'rgba(255,90,110,0.6)' : 'rgba(255,170,240,0.5)'; ctx.lineWidth = 2;
+  for (let i = 0; i < 2; i++) { ell(ctx, x, y + 10, 130 + i * 20 + pulse * 6, 30 + i * 6, S.time * (i ? -0.6 : 0.8)); ctx.stroke(); }
+  ctx.translate(x, y);
+  const sc = 0.86 * intro * k;
+  ctx.scale(sc, sc);
+  if (B.hurtT > 0) ctx.filter = 'brightness(1.35)';
+  ctx.drawImage(sp.canvas, -sp.ox, -sp.oy, sp.size, sp.size);
+  ctx.filter = 'none';
+  // glowing eyes and hands while it attacks
+  if (B.castT > 0 || B.enraged) {
+    const gl = B.castT > 0 ? B.castT / 0.6 : 0.4;
+    ctx.globalCompositeOperation = 'lighter';
+    for (const s of [-1, 1]) {
+      const hg = ctx.createRadialGradient(s * 84, 44, 0, s * 84, 44, 34);
+      hg.addColorStop(0, `rgba(255,150,240,${0.9 * gl})`); hg.addColorStop(1, 'rgba(255,150,240,0)');
+      ctx.fillStyle = hg; circ(ctx, s * 84, 44, 34); ctx.fill();
+      const eg = ctx.createRadialGradient(s * 16, -100, 0, s * 16, -100, 14);
+      eg.addColorStop(0, `rgba(255,120,255,${gl})`); eg.addColorStop(1, 'rgba(255,120,255,0)');
+      ctx.fillStyle = eg; circ(ctx, s * 16, -100, 14); ctx.fill();
+    }
+  }
+  ctx.restore();
+  // Barrier: a hexagon shield
+  if (B.barrierT > 0) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, B.barrierT * 2) * (0.75 + 0.25 * Math.sin(S.time * 10));
+    ctx.translate(x, y - 10);
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) { const a = i / 6 * TAU + Math.PI / 6; ctx.lineTo(Math.cos(a) * 165, Math.sin(a) * 175); }
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(160,225,255,0.16)'; ctx.fill();
+    ctx.lineWidth = 4; ctx.strokeStyle = '#BFF0FF'; ctx.stroke();
+    ctx.strokeStyle = 'rgba(190,240,255,0.35)'; ctx.lineWidth = 1.5;
+    for (let r = 40; r < 165; r += 42) { ctx.beginPath(); for (let i = 0; i < 6; i++) { const a = i / 6 * TAU + Math.PI / 6; ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r * 1.06); } ctx.closePath(); ctx.stroke(); }
+    ctx.restore();
+  }
+  if (S.won && B.defeatT < 1.6) {                              // dissolving into light
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    const lg = ctx.createRadialGradient(x, y - 20, 0, x, y - 20, 200 * (0.5 + B.defeatT));
+    lg.addColorStop(0, `rgba(255,240,200,${0.8 * (1 - B.defeatT / 1.6)})`); lg.addColorStop(1, 'rgba(255,240,200,0)');
+    ctx.fillStyle = lg; circ(ctx, x, y - 20, 200 * (0.5 + B.defeatT)); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawHazards() {
+  for (const h of S.hazards) {
+    if (h.t < 0) continue;
+    const p = clamp(h.t / h.dur, 0, 1);
+    if (h.kind === 'ring') {
+      if (h.done) continue;
+      const R = p * 1.1;
+      ctx.save();
+      ctx.globalAlpha = 1 - p * 0.4;
+      ell(ctx, PX, PY, PRX * R, PRY * R); ctx.lineWidth = 9; ctx.strokeStyle = 'rgba(255,90,200,0.35)'; ctx.stroke();
+      ctx.lineWidth = 3; ctx.strokeStyle = '#FFC2F0'; ctx.stroke();
+      ctx.restore();
+      continue;
+    }
+    if (!h.done) {                                               // the warning circle on the floor
+      const pr = h.kind === 'psystrike' ? '#FF4D8A' : '#A86BF0';
+      ctx.save();
+      ell(ctx, h.x, h.y, h.r, h.r / 2.2); ctx.fillStyle = rgba(pr, 0.12 + 0.18 * p); ctx.fill();
+      ctx.lineWidth = 2.5; ctx.strokeStyle = rgba(pr, 0.9); ctx.setLineDash([6, 5]); ctx.lineDashOffset = -S.time * 30; ctx.stroke();
+      ctx.setLineDash([]);
+      ell(ctx, h.x, h.y, h.r * p, h.r * p / 2.2); ctx.fillStyle = rgba(pr, 0.3); ctx.fill();
+      ctx.restore();
+    }
+    if (h.kind === 'shadow' && !h.done) {                       // the Shadow Ball in flight
+      const x = lerp(h.sx, h.x, p), y = lerp(h.sy, h.y, p) - Math.sin(p * Math.PI) * 70;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, 16);
+      g.addColorStop(0, '#E0C2FF'); g.addColorStop(0.4, '#7A3FD0'); g.addColorStop(1, 'rgba(40,10,70,0)');
+      ctx.fillStyle = g; circ(ctx, x, y, 16); ctx.fill();
+      circ(ctx, x, y, 7); ctx.fillStyle = '#2A0E4A'; ctx.fill();
+    }
+    if (h.kind === 'psystrike' && h.done && h.t < h.dur + 0.3) {   // pillar of psychic light
+      const k = 1 - (h.t - h.dur) / 0.3;
+      const g = ctx.createLinearGradient(h.x - h.r, 0, h.x + h.r, 0);
+      g.addColorStop(0, 'rgba(255,120,220,0)'); g.addColorStop(0.5, `rgba(255,230,250,${0.85 * k})`); g.addColorStop(1, 'rgba(255,120,220,0)');
+      ctx.fillStyle = g; ctx.fillRect(h.x - h.r, ARENA_TOP, h.r * 2, h.y - ARENA_TOP);
+    }
+  }
+}
+
+function drawAttacker(a) {
+  const d = depth(a.y), r = a.r * d;
+  let y = a.y, alpha = 1, k = 1;
+  if (a.state === 'drop') { const p = clamp(a.dropT, 0, 1); y = a.y - (1 - easeOut(p)) * 260; alpha = p; }
+  if (a.state === 'faint') { k = 1 - clamp(a.faintT / 0.6, 0, 1); alpha = k; }
+  if (k <= 0 || alpha <= 0) return;
+  ell(ctx, a.x, a.y + 2, r * 0.9, r * 0.32); ctx.fillStyle = 'rgba(10,0,20,0.4)'; ctx.fill();
+  const sp = getSprite(a.def.id, a.r);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(a.x, y - r - a.hop);
+  ctx.scale(d * k * (a.face < 0 ? -1 : 1), d * k);
+  if (a.hurtT > 0) ctx.filter = 'brightness(1.8)';
+  ctx.drawImage(sp.canvas, -sp.size / 2, -sp.size / 2, sp.size, sp.size);
+  ctx.filter = 'none';
+  ctx.restore();
+  if (a.state !== 'in') return;
+  // HP bar + charge meter
+  const w = 30 * d, bx = a.x - w / 2, by = a.y + 7;
+  ctx.fillStyle = 'rgba(10,0,20,0.75)'; ctx.fillRect(bx - 1, by - 1, w + 2, 6);
+  const f = clamp(a.hp / a.maxHp, 0, 1);
+  ctx.fillStyle = a.def.mega ? '#B05AF0' : f > 0.5 ? '#5FE07A' : f > 0.25 ? '#FFD23F' : '#FF4D4D';
+  ctx.fillRect(bx, by, w * f, 2.5);
+  ctx.fillStyle = '#6CC8FF'; ctx.fillRect(bx, by + 3, w * clamp(a.energy / 100, 0, 1), 1.5);
+  if (a.def.mega) {
+    ctx.save(); ctx.font = `700 9px ${FONT}`; ctx.textAlign = 'center'; ctx.fillStyle = '#E0C2FF';
+    ctx.fillText('MEGA', a.x, by + 15); ctx.restore();
+  }
+}
+
+function drawShots() {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const sh of S.shots) {
+    const p = clamp(sh.t / sh.dur, 0, 1);
+    const x = lerp(sh.x0, sh.x1, p), y = lerp(sh.y0, sh.y1, p) + Math.sin(p * Math.PI) * sh.arc;
+    const r = sh.big ? 13 : 4.5;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2);
+    g.addColorStop(0, '#FFFFFF'); g.addColorStop(0.35, sh.color); g.addColorStop(1, rgba(sh.color, 0));
+    ctx.fillStyle = g; circ(ctx, x, y, r * 2); ctx.fill();
+    if (sh.big) {                                              // a comet tail for charged attacks
+      for (let i = 1; i <= 4; i++) {
+        const q = Math.max(0, p - i * 0.05);
+        const tx = lerp(sh.x0, sh.x1, q), ty = lerp(sh.y0, sh.y1, q) + Math.sin(q * Math.PI) * sh.arc;
+        ctx.fillStyle = rgba(sh.color, 0.25 / i); circ(ctx, tx, ty, r * (1.2 - i * 0.15)); ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function drawFx() {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const f of S.fx) {
+    const t = 1 - f.life / f.max;
+    if (f.kind === 'ring') {
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = f.color;
+      ctx.lineWidth = f.width * (1 - t) + 1;
+      ctx.beginPath(); ctx.arc(f.x, f.y, Math.max(0, f.r0 + (f.r1 - f.r0) * easeOut(t)), 0, TAU); ctx.stroke();
+    } else if (f.kind === 'spark') {
+      ctx.globalAlpha = 1 - t;
+      ctx.fillStyle = f.color;
+      circ(ctx, f.x, f.y, f.size * (1 - t * 0.5)); ctx.fill();
+    } else if (f.kind === 'confetti') {
+      ctx.globalAlpha = t < 0.85 ? 1 : (1 - t) / 0.15;
+      ctx.save(); ctx.translate(f.x, f.y); ctx.rotate(f.a);
+      ctx.fillStyle = f.color; ctx.fillRect(-f.size / 2, -f.size / 4, f.size, f.size / 2);
+      ctx.restore();
+    } else if (f.kind === 'plus') {
+      ctx.globalAlpha = 1 - t;
+      ctx.fillStyle = '#7CF29A'; ctx.fillRect(f.x - 5, f.y - 1.5, 10, 3); ctx.fillRect(f.x - 1.5, f.y - 5, 3, 10);
+    } else if (f.kind === 'heart') {
+      ctx.globalAlpha = 1 - t;
+      ctx.save(); ctx.translate(f.x, f.y); ctx.scale(0.8, 0.8);
+      ctx.beginPath(); ctx.moveTo(0, 6); ctx.bezierCurveTo(-12, -2, -6, -12, 0, -5); ctx.bezierCurveTo(6, -12, 12, -2, 0, 6);
+      ctx.fillStyle = '#FF7AB8'; ctx.fill(); ctx.restore();
+    }
+  }
+  for (const f of S.fx) {
+    if (f.kind !== 'float') continue;
+    const t = 1 - f.life / f.max;
+    const pop = t < 0.12 ? 0.5 + 0.5 * easeOutBack(t / 0.12) : 1;
+    ctx.globalAlpha = t < 0.75 ? 1 : (1 - t) / 0.25;
+    const y = f.y - 24 * easeOut(t), x = clamp(f.x, 80, 410);
+    fitFont(ctx, f.text, 280, f.size * pop, 800);
+    ctx.lineJoin = 'round'; ctx.lineWidth = 4; ctx.strokeStyle = INK; ctx.strokeText(f.text, x, y);
+    ctx.fillStyle = f.color; ctx.fillText(f.text, x, y);
+  }
+  ctx.restore();
+}
+
+// The boss HP bar, like a raid in the game, with the active boosts under it.
+function drawBossBar() {
+  const B = S.boss, f = hpFrac();
+  const x0 = 20, w = 500, y = L.barY - L.block, h = 26;
+  ctx.save();
+  roundRect(ctx, x0 - 3, y - h / 2 - 3, w + 6, h + 6, 10); ctx.fillStyle = INK; ctx.fill();
+  roundRect(ctx, x0, y - h / 2, w, h, 8); ctx.fillStyle = '#3A1A4E'; ctx.fill();
+  if (f > 0) {
+    ctx.save(); roundRect(ctx, x0, y - h / 2, w, h, 8); ctx.clip();
+    const g = ctx.createLinearGradient(x0, 0, x0 + w, 0);
+    const col = f > 0.5 ? ['#5FE07A', '#2FB86A'] : f > 0.2 ? ['#FFE15A', '#F2A93A'] : ['#FF6A6A', '#E0283A'];
+    g.addColorStop(0, col[0]); g.addColorStop(1, col[1]);
+    ctx.fillStyle = g; ctx.fillRect(x0, y - h / 2, w * f, h);
+    ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.fillRect(x0, y - h / 2, w * f, h * 0.38);
+    if (B.hurtT > 0) { ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(x0, y - h / 2, w * f, h); }
+    ctx.restore();
+  }
+  // where the bar "should" be to finish on time is not shown — viewers guess!
+  ctx.textBaseline = 'middle';
+  ctx.font = `700 15px ${FONT}`; ctx.textAlign = 'left';
+  ctx.lineWidth = 3.5; ctx.lineJoin = 'round'; ctx.strokeStyle = INK;
+  ctx.strokeText('MEWTWO', x0 + 10, y + 1); ctx.fillStyle = '#FFFFFF'; ctx.fillText('MEWTWO', x0 + 10, y + 1);
+  ctx.textAlign = 'right';
+  const p = f * 100, pct = f <= 0 ? '0%' : p < 1 ? p.toFixed(1) + '%' : Math.ceil(p) + '%';
+  ctx.strokeText(pct, x0 + w - 10, y + 1); ctx.fillStyle = '#FFFFFF'; ctx.fillText(pct, x0 + w - 10, y + 1);
+  if (B.barrierT > 0) { ctx.textAlign = 'center'; ctx.strokeText('BARRIER', x0 + w / 2, y + 1); ctx.fillStyle = '#BFF0FF'; ctx.fillText('BARRIER', x0 + w / 2, y + 1); }
+  // active boosts
+  const tags = S.boosts.map(b => b.name);
+  if (B.enraged && !S.won) tags.push('ENRAGED');
+  let tx = x0;
+  ctx.font = `700 11px ${FONT}`; ctx.textAlign = 'center';
+  for (const t of tags) {
+    const tw = ctx.measureText(t).width + 16;
+    roundRect(ctx, tx, y + h / 2 + 6, tw, 17, 8.5);
+    ctx.fillStyle = t === 'ENRAGED' ? '#E0283A' : t === 'MEGA' ? '#8E3FD0' : t === 'FOG' ? '#5A6A9A' : '#D94F9A'; ctx.fill();
+    ctx.fillStyle = '#FFFFFF'; ctx.fillText(t, tx + tw / 2, y + h / 2 + 15);
+    tx += tw + 6;
+  }
+  ctx.restore();
+}
+
+// Raid timer (left) and trainers in the raid (right).
+function drawHud() {
+  const secs = Math.max(0, Math.ceil(S.clock));
+  const text = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  const urgent = !S.timeUp && S.clock <= 10;
+  const pulse = urgent ? 1 + 0.12 * Math.pow(S.clock - Math.floor(S.clock), 3) : 1;
+  const y = L.hudY - L.block;
+  const pill = (x, w, color) => {
+    roundRect(ctx, x - w / 2, y - 18, w, 36, 18); ctx.fillStyle = color; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = '#F06BC8'; ctx.stroke();
+  };
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.save();
+  ctx.translate(64, y); ctx.scale(pulse, pulse); ctx.translate(-64, -y);
+  pill(64, 100, urgent || S.timeUp ? '#C81E3C' : 'rgba(20,6,40,0.8)');
+  circ(ctx, 34, y, 9); ctx.lineWidth = 2.2; ctx.strokeStyle = '#FFFFFF'; ctx.stroke();
+  seg(ctx, 34, y, 34, y - 5, 2, '#FFFFFF'); seg(ctx, 34, y, 38, y + 1, 2, '#FFFFFF');
+  ctx.font = `700 22px ${FONT}`; ctx.fillStyle = '#FFFFFF';
+  ctx.fillText(text, 74, y + 1);
+  ctx.restore();
+  pill(474, 104, 'rgba(20,6,40,0.8)');
+  for (const [dx, k] of [[-6, 0.8], [0, 1]]) {                   // people icon
+    circ(ctx, 440 + dx, y - 5 * k, 4.5 * k); ctx.fillStyle = k < 1 ? '#C9A3E8' : '#FFFFFF'; ctx.fill();
+    ctx.beginPath(); ctx.arc(440 + dx, y + 8 * k, 7.5 * k, Math.PI, TAU); ctx.fill();
+  }
+  fitFont(ctx, `${S.slots.length} TRAINERS`, 66, 13, 700);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillText(`${S.slots.length} TRAINERS`, 489, y + 1);
+  ctx.restore();
+}
+
+function drawBanner() {
+  const B = S.banner;
+  if (!B) return;
+  const age = B.max - B.life;
+  const inT = clamp(age / 0.25, 0, 1), outT = clamp(B.life / 0.3, 0, 1);
+  if (B.final) { drawFinal(B); return; }
+  const y = ARENA_TOP + 52;
+  ctx.save();
+  ctx.globalAlpha = Math.min(outT, inT * 2);
+  ctx.translate(245, y);
+  ctx.scale(0.6 + 0.4 * easeOutBack(inT), 0.6 + 0.4 * easeOutBack(inT));
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const g = ctx.createLinearGradient(-240, 0, 240, 0);
+  g.addColorStop(0, rgba(B.color, 0)); g.addColorStop(0.15, rgba(B.color, 0.55)); g.addColorStop(0.85, rgba(B.color, 0.55)); g.addColorStop(1, rgba(B.color, 0));
+  ctx.fillStyle = 'rgba(14,4,28,0.82)'; ctx.fillRect(-250, -36, 500, 72);
+  ctx.fillStyle = g; ctx.fillRect(-250, -36, 500, 3); ctx.fillRect(-250, 33, 500, 3);
+  fitFont(ctx, B.text, 450, 34, 800);
+  raidText(ctx, B.text, 0, -8, '#FFFFFF', B.color, 6);
+  fitFont(ctx, B.sub, 440, 15, 600);
+  ctx.fillStyle = lighten(B.color, 0.6); ctx.fillText(B.sub, 0, 20);
+  ctx.restore();
+}
+
+// 0:00: RAID WON! or RAID FAILED!
+function drawFinal(B) {
+  ctx.save();
+  ctx.fillStyle = B.won ? 'rgba(20,6,40,0.35)' : 'rgba(30,0,10,0.45)';
+  const top = L.barY - L.block + 17;
+  ctx.fillRect(0, top, LW, 960 - BOTTOM_SPACE - top);
+  ctx.translate(245, BOSS_Y - 10);
+  if (B.won) {
+    ctx.save(); ctx.rotate(S.time * 0.4);
+    ctx.fillStyle = 'rgba(255,230,150,0.14)';
+    for (let i = 0; i < 14; i++) { ctx.rotate(TAU / 14); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-18, -260); ctx.lineTo(18, -260); ctx.closePath(); ctx.fill(); }
+    ctx.restore();
+  }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  fitFont(ctx, B.text, 470, 64, 800);
+  const g = ctx.createLinearGradient(0, -36, 0, 30);
+  if (B.won) { g.addColorStop(0, '#FFF6C2'); g.addColorStop(1, '#FFB52A'); } else { g.addColorStop(0, '#FFC2C8'); g.addColorStop(1, '#FF3B5C'); }
+  raidText(ctx, B.text, 0, 0, g, B.won ? '#FFD23F' : '#FF3B5C', 10);
+  fitFont(ctx, B.sub, 460, 24, 700);
+  ctx.lineWidth = 5; ctx.lineJoin = 'round'; ctx.strokeStyle = INK; ctx.strokeText(B.sub, 0, 52);
+  ctx.fillStyle = '#FFFFFF'; ctx.fillText(B.sub, 0, 52);
+  ctx.restore();
+}
+
+function draw() {
+  if (!canvas.width || !canvas.height || !hookLayer) return;   // page not laid out yet
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(backdrop, 0, 0);
+  const sx = S.shake ? rand(-1, 1) * S.shake : 0, sy = S.shake ? rand(-1, 1) * S.shake : 0;
+  ctx.setTransform(scale, 0, 0, scale, sx * scale, (L.block + sy) * scale);
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(-10, TOP_SPACE, LW + 20, 960 - BOTTOM_SPACE - TOP_SPACE); ctx.clip();
+  // the vortex turning behind the boss
+  ctx.save();
+  ctx.translate(S.boss.x, BOSS_Y - 30); ctx.rotate(-S.time * 0.35);
+  ctx.globalAlpha = S.boss.enraged ? 1 : 0.8;
+  ctx.drawImage(vortex, -260, -260, 520, 520);
+  ctx.restore();
+  if (S.bolt > 0) { ctx.fillStyle = `rgba(255,220,255,${S.bolt * 1.2})`; ctx.fillRect(0, TOP_SPACE, LW, 960 - TOP_SPACE - BOTTOM_SPACE); }
+  drawBoss();
+  drawHazards();
+  const order = S.squad.slice().sort((a, b) => a.y - b.y);
+  for (const a of order) drawAttacker(a);
+  drawShots();
+  drawFx();
+  ctx.restore();
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(hookLayer, 0, 0);
+  ctx.setTransform(scale, 0, 0, scale, 0, L.block * scale);
+  drawBossBar();
+  drawHud();
+  if (S.flash > 0) {
+    ctx.fillStyle = `rgba(255,235,255,${S.flash})`;
+    ctx.fillRect(-20, -L.block - 20, LW + 40, LH + 40);
+  }
+  drawBanner();
+
+  // Black bands (drawn last, unshaken, so nothing spills into TikTok's UI zones)
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, LW, L.panelTop);
+  ctx.fillRect(0, L.panelBottom, LW, LH - L.panelBottom);
+}
+
+/* =====================================================================
+   VIDEO RECORDING
+   Records one full round straight from the canvas (1080×1920, 60fps, with
+   sound), keeps going a few seconds into the freeze, then saves the file.
+   ===================================================================== */
+
+const params = new URLSearchParams(location.search);
+// ?upload=/path  → POST the finished video to this same-origin path instead of
+// downloading it (used by tools/render.py). ?autorecord → start on load.
+const UPLOAD_PATH = /^\/(?!\/)/.test(params.get('upload') || '') ? params.get('upload') : null;
+
+const Recorder = {
+  on: false, rec: null, chunks: [], tail: 0, startedAt: 0, frames: 0,
+  TAIL_SECONDS: 3.5,        // how long to keep filming the frozen end screen
+
+  // Best format this browser can record: MP4 (H.264/AAC) first, WebM fallback.
+  pickMime() {
+    const types = [
+      'video/mp4;codecs=avc1.64002A,mp4a.40.2',
+      'video/mp4;codecs=avc1,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+    return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  },
+
+  start() {
+    if (this.on) return;
+    if (!window.MediaRecorder || !canvas.captureStream) {
+      alert("This browser can't record video. Try Chrome or Safari on a computer.");
+      return;
+    }
+    Sound.unlock();
+    this.on = true;
+    resize();                 // lock the canvas to 1080×1920
+    startRound();
+    draw();
+
+    const stream = canvas.captureStream(60);
+    const audio = Sound.recordStream();
+    if (audio) audio.getAudioTracks().forEach(t => stream.addTrack(t));
+
+    const mimeType = this.pickMime();
+    const opts = { videoBitsPerSecond: 8_000_000, audioBitsPerSecond: 192_000 };
+    if (mimeType) opts.mimeType = mimeType;
+    this.rec = new MediaRecorder(stream, opts);
+    this.chunks = [];
+    this.rec.ondataavailable = e => { if (e.data.size) this.chunks.push(e.data); };
+    this.rec.onstop = () => this.save();
+    this.rec.start(1000);
+
+    this.tail = this.TAIL_SECONDS;
+    this.startedAt = performance.now();
+    this.frames = 0;
+    $('recBtn').classList.add('on');
+    $('recBtn').textContent = '⏹';
+    $('recBadge').hidden = false;
+  },
+
+  // Called every frame once the round is over: film the freeze, then stop.
+  tick(rdt) {
+    if (!this.rec) return;
+    this.tail -= rdt;
+    if (this.tail <= 0) this.stop();
+  },
+
+  stop() {
+    if (this.rec && this.rec.state !== 'inactive') this.rec.stop();
+  },
+
+  save() {
+    const type = this.rec.mimeType || 'video/webm';
+    const blob = new Blob(this.chunks, { type });
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const name = `pokemon-go-raid-${stamp}.${ext}`;
+    const secs = (performance.now() - this.startedAt) / 1000;
+    const fps = (this.frames / secs).toFixed(1);
+
+    this.rec = null;
+    this.chunks = [];
+    this.on = false;
+    resize();                 // back to the normal screen layout
+    $('recBtn').classList.remove('on');
+    $('recBtn').textContent = '⏺';
+    $('recBadge').hidden = true;
+
+    if (UPLOAD_PATH) {
+      fetch(`${UPLOAD_PATH}?name=${encodeURIComponent(name)}&fps=${fps}`, { method: 'POST', body: blob });
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  },
+
+  // On-screen REC badge with elapsed time.
+  frame() {
+    if (!this.on) return;
+    this.frames++;
+    const s = Math.floor((performance.now() - this.startedAt) / 1000);
+    const text = `● REC ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    const badge = $('recBadge');
+    if (badge.textContent !== text) badge.textContent = text;
+  },
+};
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+
+$('recBtn').addEventListener('click', () => (Recorder.on ? Recorder.stop() : Recorder.start()));
+
+// Tap a Pokémon to make it fire its charged attack
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (S.timeUp || S.won) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width * LW;
+  const y = (e.clientY - rect.top) / rect.height * LH - L.block;
+  const a = active().find(o => Math.hypot(o.x - x, o.y - o.r - y) < o.r * 1.6);
+  if (a) { a.energy = 0; fire(a, true); }
+});
+
+// Audio starts on load if the browser allows it. If it's blocked, any touch,
+// click or key press starts it (different browsers count different events).
+for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) {
+  window.addEventListener(ev, () => Sound.unlock(), { capture: true });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Sound.unlock(); });
+
+const muteBtn = $('muteBtn');
+function toggleMute() {
+  Sound.setMuted(!Sound.muted);
+  muteBtn.textContent = Sound.muted ? '🔇' : '🔊';
+}
+muteBtn.addEventListener('click', toggleMute);
+
+const panel = $('panel');
+$('setBtn').addEventListener('click', () => { panel.hidden = !panel.hidden; });
+$('closeBtn').addEventListener('click', () => { panel.hidden = true; });
+$('resetBtn').addEventListener('click', () => { startRound(); panel.hidden = true; });
+
+// Bind a slider to a Settings key with a formatted readout
+function bindSlider(inputId, labelId, key, fmtVal) {
+  const input = $(inputId), label = $(labelId);
+  input.value = Settings[key];
+  label.textContent = fmtVal(Settings[key]);
+  input.addEventListener('input', () => {
+    Settings[key] = parseFloat(input.value);
+    label.textContent = fmtVal(Settings[key]);
+  });
+}
+bindSlider('inHp', 'vHp', 'hp', v => v.toFixed(2) + '×');
+bindSlider('inPow', 'vPow', 'power', v => v.toFixed(2) + '×');
+
+// Keyboard shortcuts for desktop recording: M = mute, R = restart the round
+window.addEventListener('keydown', e => {
+  if (e.key === 'm' || e.key === 'M') toggleMute();
+  if (e.key === 'r' || e.key === 'R') startRound();
+});
+
+window.addEventListener('resize', resize);
+
+/* =====================================================================
+   MAIN LOOP
+   ===================================================================== */
+
+resize();
+startRound();
+Sound.unlock();     // try to start sound right away
+if (params.has('autorecord')) Recorder.start();
+
+let lastT = performance.now();
+function frame(now) {
+  // Never negative (the first rAF timestamp can be earlier than lastT), capped after tab switches
+  const rdt = clamp((now - lastT) / 1000, 0, 1 / 20);
+  lastT = now;
+  try {
+    update(rdt);
+    draw();
+  } catch (err) {
+    console.error(err);     // log it (render.py prints these) but keep the loop alive
+  }
+  Recorder.frame();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

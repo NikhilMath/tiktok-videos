@@ -35,7 +35,8 @@ tiktok-videos/
 │   ├── 06-one-piece.html
 │   ├── 07-brainrot-race.html
 │   ├── 08-pokemon-go-team-war.html
-│   └── 09-pokemon-go-ball-rain.html
+│   ├── 09-pokemon-go-ball-rain.html
+│   └── 10-pokemon-go-raid.html
 ├── tools/
 │   └── render.py        ← records a video page to an MP4
 ├── ball-battle/         ← separate Python generator: two weapon balls fight (see ball-battle/README.md)
@@ -155,7 +156,7 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 - **In a territory game, a target inside one team's land can only be reached by that team.** 08's raid boss sat on a gym and was almost never beaten (2–11 hits against 14 HP). Clearing a neutral zone around it and pulling everyone in made raids contested and winnable (about 85%).
 - **A schedule needs a lever on both sides.** 09's throw controller could only throw *less* when catches ran ahead, but un-aimed throws still caught Pokémon and the round was decided ~35s early. What fixed it: deliberate misses for the chaos, an adaptive aimed share, and a rubber band on the catch chance itself (`pace()`).
 - **Don't give a method the same name as a property.** `Sound.out()` was silently replaced by the `Sound.out` gain node, so the first elimination threw.
-- **Previewing in the Claude desktop app:** its preview server can't read `~/Documents` (a macOS permission). Start `python3 -m http.server 8765` in a terminal instead; `.claude/launch.json` has a "site" entry that attaches to it.
+- **Previewing in the Claude desktop app:** its preview server can't read `~/Documents` (a macOS permission). Start `python3 -m http.server 8765 --directory .` from the repo in a terminal instead; `.claude/launch.json` has a "site" entry that attaches to it. Use `--directory .` (not the default): the default remembers the folder's path, so the server 404s if the folder is moved while it runs.
 
 ---
 
@@ -172,6 +173,7 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 | 07 | `videos/07-brainrot-race.html` | Comment below 👇 Which BRAINROT WINS the RACE? | Any of the 12 can win (each about 7–11% over 300 simulated rounds); decided 2–8s before 0:00 |
 | 08 | `videos/08-pokemon-go-team-war.html` | Comment below 👇 Which TEAM takes over the MAP? | Any of the 3 teams (19/21/20 wins over 60 simulated rounds); usually decided by 1–10%, and the lead changes in the last 25s in about 80% of rounds |
 | 09 | `videos/09-pokemon-go-ball-rain.html` | Comment below 👇 Which POKÉMON NEVER gets CAUGHT? | Any of the 12 (each about 2–13% over 200 simulated rounds); decided about 0–20s before 0:00 (median ~9s); about 5% end with 2 escapees |
+| 10 | `videos/10-pokemon-go-raid.html` | Comment below 👇 Will they BEAT MEWTWO in time? | A coin flip (53 wins in 100 simulated rounds): wins usually land 0–9s before 0:00, fails usually leave Mewtwo with 0.1–10% HP |
 
 ### 01 · Pokémon: Pokédex evolution chain
 - **Look:** neon on black, a glowing ring that cycles through rainbow colors, a chute at the top.
@@ -274,6 +276,18 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 - **Sound:** an E-minor "wild encounter" groove (kick, claps, octave synth bass, stabs), throw whooshes, the capture zap, click-clack wobbles, a Gotcha chime, a breakout pop, a sound for each special move, and fireworks.
 - **Tap** a Pokémon to throw a ball at it (or anywhere to throw one there).
 
+### 10 · Pokémon GO: Raid Battle (co-op boss fight)
+- **Why:** the third Pokémon GO video. The 2:00 round is the raid timer, and everyone can guess yes or no.
+- **Look:** a **raid storm**: a purple-magenta sky with a slowly turning vortex behind the boss, crystal spires, lightning flashes, and a glowing round raid platform seen in 3/4 view. Lettering is Futura with a pink glow. The UI is a big boss HP bar (green → yellow → red) with boost tags under it, a raid timer and a trainer count.
+- **The boss:** a full-body **Mewtwo** drawn in code (head tube, horn-ears, purple tail and belly), floating, with a psychic aura and glowing eyes and hands when it attacks.
+- **Game:** 12 trainers' Pokémon (Tyranitar, Gengar, Pikachu, Charizard, Machamp, Lucario, Umbreon, Snorlax, Dragonite, Garchomp, Metagross, Scizor) roam the platform and fire fast attacks, plus a named charged attack whenever their energy fills. Dark, Ghost and Bug hits are **SUPER EFFECTIVE**, and Machamp's are "Not very effective…".
+  - **Mewtwo fires back (bullet-hell):** Shadow Ball volleys with warning circles on the floor, a psychic ring sweeping the whole platform (jump over it!), and Psystrike on the biggest crowd. Pokémon that notice dodge or jump. Fainted ones are replaced by their trainer's next Pokémon after 3.5s.
+- **Events every ~9s:** helping the trainers: +3 Trainers Joined, Mega Gengar (raid boost), Max Revive, Best Friends bonus, Fog weather, Golden Razz (everyone's charged attack at once). Helping Mewtwo: Barrier (damage ÷4), Recover, Psystrike Storm, Teleport (attacks in the air miss), Shadow Ball Storm. Also Enraged at 30% HP and "FINAL 10 SECONDS! All-out attack!".
+- **Balance:** the side that's behind the schedule gets the next event, and a hidden rubber band (`bandMult()`) scales the trainers' damage to keep the boss near a schedule that empties a few seconds *after* 0:00 (`planEnd: 126`). It switches off for the last 8 seconds, so the finish is a real coin flip.
+- **Ending:** "RAID WON! with N seconds to spare" (Mewtwo dissolves into light, confetti) or "RAID FAILED! Mewtwo still had N% HP left…".
+- **Sound:** a driving A-minor raid theme (pumping bass, timpani, snare, brass stabs; hi-hats in the last 30s), attack zaps and impacts, a super-effective ding, Mewtwo's roar, psychic booms, warning beeps, a heal chime and win/fail fanfares.
+- **Tap** a Pokémon to fire its charged attack.
+
 ### Ball Battle (Python generator, `ball-battle/`)
 - **What it is:** a separate tool, made from the user's own spec, so its rules differ from the HTML videos.
 - **Video:** 30–60 second fights, an end freeze of 2 seconds, and a layout that keeps clear of TikTok's bottom 20% and right edge.
@@ -296,6 +310,7 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 | 07 | Claymation: pastel clay diorama, squash & stretch | Vertical stack of ramps, rebuilt every floor | Marble race in elimination heats (last one out) + special moves, track flips | Tarantella mandolin, boings, plops, sad trombone |
 | 08 | Pokémon GO map: pastel top-down city, white GO-style cards and pills | Grid of cells over the city, no gravity | Territory painting (color war: flip a rival's cell, bounce off) + legendary-bird swoops, weather, raids | Marimba map loop, per-team flip pops, bird cries |
 | 09 | AR camera at golden hour: sunset park, lens flare, film grain, viewfinder; fades to night | Side view: lawn, bench, playground deck, rock, gravity | Survival: items fall from the sky (Poké Balls), 1-2-3 wobble catch or break free, last one uncaught wins | Encounter groove (claps, synth bass), wobble clicks, Gotcha chime |
+| 10 | Raid storm: purple vortex, crystal spires, glowing raid platform in 3/4 view, Futura | A giant boss over a round platform, top-down movement on the floor | Co-op boss raid vs. the clock: squad fires at one giant boss, boss fires back (bullet-hell dodging), win or fail | Driving raid theme (timpani, brass), impacts, roars |
 | Ball Battle | Dark neon arena, glow and trails (Python) | Circle, no gravity, +5% speed per bounce | 1v1 spinning-weapon duel with HP | Generated blips, thuds, metal clangs |
 
 **Not used yet:**

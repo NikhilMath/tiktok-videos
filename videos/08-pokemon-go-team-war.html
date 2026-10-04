@@ -2159,6 +2159,14 @@ function drawFx() {
   ctx.restore();
 }
 
+// Percentages as text: one decimal place when two teams would otherwise show
+// the same whole number (so the winner is never "36% vs 36%").
+function pctTexts(shares) {
+  const whole = shares.map(v => Math.round(v * 100));
+  const tie = whole.some((w, i) => whole.indexOf(w) !== i);
+  return shares.map(v => (tie ? (v * 100).toFixed(1) : String(Math.round(v * 100))) + '%');
+}
+
 // The team score bar: three colored segments sized by how much each team owns.
 function drawScoreBar() {
   const x0 = 18, x1 = 522, y = L.stripY, h = 32, W = x1 - x0;
@@ -2182,11 +2190,12 @@ function drawScoreBar() {
   ctx.restore();
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const lead = S.timeUp ? S.winner : leader();
+  const pcts = S.timeUp ? pctTexts(S.banner.shares) : [0, 1, 2].map(t => Math.round(share(t) * 100) + '%');
   for (let t = 0; t < 3; t++) {
-    const [sx, w] = segs[t], pct = Math.round(share(t) * 100);
-    let label = `${TEAMS[t].name} ${pct}%`;
+    const [sx, w] = segs[t], pct = pcts[t];
+    let label = `${TEAMS[t].name} ${pct}`;
     ctx.font = `900 16px ${GO}`;
-    if (ctx.measureText(label).width > w - 38) label = `${pct}%`;
+    if (ctx.measureText(label).width > w - 38) label = pct;
     const cx = sx + w / 2 + (w > 60 ? 9 : 0);
     fitFont(ctx, label, Math.max(20, w - 34), 17, 900);
     const ex = cx - ctx.measureText(label).width / 2 - 13;
@@ -2298,14 +2307,16 @@ function drawBanner() {
   ctx.fillStyle = UI_TEXT; ctx.fillText('TAKES OVER THE MAP!', 0, -h / 2 + 118);
   // final percentages
   const order = [0, 1, 2].sort((a, b) => B.shares[b] - B.shares[a]);
+  const pcts = pctTexts(B.shares);
   order.forEach((t, i) => {
     const bx = -w / 2 + 40 + i * ((w - 80) / 3) + (w - 80) / 6, by = h / 2 - 44;
     drawEmblem(ctx, t, bx - 34, by, 14);
     ctx.font = `900 ${i === 0 ? 30 : 24}px ${GO}`;
     ctx.fillStyle = TEAMS[t].color;
     ctx.textAlign = 'left';
-    ctx.lineWidth = 3; ctx.strokeStyle = TEAMS[t].dark; ctx.strokeText(`${Math.round(B.shares[t] * 100)}%`, bx - 16, by + 1);
-    ctx.fillText(`${Math.round(B.shares[t] * 100)}%`, bx - 16, by + 1);
+    if (pcts[t].includes('.')) fitFont(ctx, pcts[t], 70, i === 0 ? 25 : 20, 900);
+    ctx.lineWidth = 3; ctx.strokeStyle = TEAMS[t].dark; ctx.strokeText(pcts[t], bx - 16, by + 1);
+    ctx.fillText(pcts[t], bx - 16, by + 1);
   });
   ctx.restore();
 }

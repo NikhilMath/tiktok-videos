@@ -33,7 +33,8 @@ tiktok-videos/
 │   ├── 04-dragon-ball.html
 │   ├── 05-naruto.html
 │   ├── 06-one-piece.html
-│   └── 07-brainrot-race.html
+│   ├── 07-brainrot-race.html
+│   └── 08-pokemon-go-team-war.html
 ├── tools/
 │   └── render.py        ← records a video page to an MP4
 ├── ball-battle/         ← separate Python generator: two weapon balls fight (see ball-battle/README.md)
@@ -150,6 +151,7 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 - **Anything applied every physics step must be tiny.** Physics runs 240 times a second, so a "small" rolling friction of 0.02 per step made every marble in 07 crawl at about 60 units/s. 0.0015 is right.
 - **Marble tracks jam where a ramp drops onto the next one.** A column of marbles wedges between the wall and the end of the upper ramp. Keep the gap wide, leave headroom under each ramp end, and nudge a stuck marble *sideways along its ramp*, not straight up (kicking everything up just rebuilds the jam).
 - **Moving obstacles need an escape window.** 07's swinging pizzas first blocked the track for the whole swing and trapped marbles in a loop. They now rise clear of the track at the ends of each swing and aren't bouncy.
+- **In a territory game, a target inside one team's land can only be reached by that team.** 08's raid boss sat on a gym and was almost never beaten (2–11 hits against 14 HP). Clearing a neutral zone around it and pulling everyone in made raids contested and winnable (about 85%).
 - **Don't give a method the same name as a property.** `Sound.out()` was silently replaced by the `Sound.out` gain node, so the first elimination threw.
 - **Previewing in the Claude desktop app:** its preview server can't read `~/Documents` (a macOS permission). Start `python3 -m http.server 8765` in a terminal instead; `.claude/launch.json` has a "site" entry that attaches to it.
 
@@ -166,6 +168,7 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 | 05 | `videos/05-naruto.html` | Comment below 👇 How many CLONES at the end? | Anywhere from about 5 to 220 clones |
 | 06 | `videos/06-one-piece.html` | Comment below 👇 What will the MAX BOUNTY be? | Luffy ฿3B (about 58%) or Zoro ฿1.111B, often decided in the last 20 seconds |
 | 07 | `videos/07-brainrot-race.html` | Comment below 👇 Which BRAINROT WINS the RACE? | Any of the 12 can win (each about 7–11% over 300 simulated rounds); decided 2–8s before 0:00 |
+| 08 | `videos/08-pokemon-go-team-war.html` | Comment below 👇 Which TEAM takes over the MAP? | Any of the 3 teams (19/21/20 wins over 60 simulated rounds); usually decided by 1–10%, and the lead changes in the last 25s in about 80% of rounds |
 
 ### 01 · Pokémon: Pokédex evolution chain
 - **Look:** neon on black, a glowing ring that cycles through rainbow colors, a chute at the top.
@@ -239,6 +242,23 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 - **Sound:** a quiet tarantella (mandolin oom-pa-pa in A minor), clay thocks and plops, mandolin notes on olive pegs, boings, a sad trombone on every elimination, a goose honk, a bomb whistle.
 - **Bands:** standard (top 110, bottom 142). The right wall sits at x = 476 so the action stays clear of TikTok's like/comment buttons.
 
+### 08 · Pokémon GO: Team War (territory painting)
+- **Why:** the first of three Pokémon GO videos (2026-10-04). Everyone who plays has a team, so the comments become a team war.
+- **Look:** the **Pokémon GO map**: a pastel top-down city (grass, parks with trees, a river, white roads, pale buildings) under a blue sky with clouds, with a faint cell grid on top. The UI copies the game: white pill timer and weather widget, white notification cards that drop in, Avenir Next lettering. The hook's last line is in all three team colors.
+- **Game:** a classic "color war". The map is 46×52 cells, split into three territories: **Mystic** (blue), **Valor** (red), **Instinct** (yellow). Each team's Pokémon roll at a steady speed; when one pushes into a rival's cell, that cell flips to its color and it bounces off. A score bar shows each team's share live, with a crown on the leader.
+  - **Pokémon (balls with code-drawn faces):** Mystic: Squirtle, Marill, Poliwag, Spheal. Valor: Charmander, Torchic, Vulpix, Growlithe. Instinct: Pikachu, Pichu, Joltik, Voltorb. Three per team at the start, at most 7.
+  - **Gyms** change color when the cell under them flips, and paint a small circle around them ("GYM TAKEN!"). PokéStops spin purple when someone passes.
+- **Events every ~9s** (a shuffled deck, a bird first):
+  - **Legendary birds:** Articuno, Moltres or Zapdos swoops across the map, painting a wide stripe through the biggest rival's land. The team that's furthest behind is the likeliest to get its bird.
+  - **Weather:** rain, sun or a thunderstorm boosts one team's speed (×1.65) for 8s.
+  - **Team GO Rocket:** the Meowth balloon floats over the leader, bombs patches of its land into neutral (dark) cells that anyone can take, and steals one of its Pokémon.
+  - **Raid Battle:** an egg hatches a Snorlax on a gym and clears a neutral zone around it; every Pokémon is pulled in, and the team that hits it most wins 2 new Pokémon and a big paint burst (about 85% of raids are won; otherwise "SNORLAX FLED!").
+  - **Wild Pokémon:** three Poké Balls land and hatch into whichever team owns that spot. **Lure Module:** everyone is pulled toward one PokéStop.
+  - **Legendary finale** at 0:14: all three birds at once.
+- **Ending:** at 0:00 the team with the most cells wins: "TEAM MYSTIC TAKES OVER THE MAP!" with the final percentages.
+- **Sound:** a marimba "walking around the map" loop (C–Am–F–G), a different pop per team when cells flip (glassy, warm, zappy), notification dings, bird cries, villain motif and bombs, rain and thunder, raid hits and a fanfare in the winner's key.
+- **Tap the map** to drop in a new Pokémon for whichever team owns that spot.
+
 ### Ball Battle (Python generator, `ball-battle/`)
 - **What it is:** a separate tool, made from the user's own spec, so its rules differ from the HTML videos.
 - **Video:** 30–60 second fights, an end freeze of 2 seconds, and a layout that keeps clear of TikTok's bottom 20% and right edge.
@@ -259,14 +279,15 @@ The output is about 2:05 long and about 245 MB. If the TikTok phone app rejects 
 | 05 | Red-moon horror-fantasy, glitch flashes | The moon, swirling vortex | Swarm growth vs. enemy waves (guess the number) | Taiko loop, poofs, drones |
 | 06 | Treasure map, wooden ship's wheel, wanted posters | Wheel and chute, gravity, sea inside | Merge chain (the user asked for 01's game) + sea events | Coins, wood knocks, shanty, ocean |
 | 07 | Claymation: pastel clay diorama, squash & stretch | Vertical stack of ramps, rebuilt every floor | Marble race in elimination heats (last one out) + special moves, track flips | Tarantella mandolin, boings, plops, sad trombone |
+| 08 | Pokémon GO map: pastel top-down city, white GO-style cards and pills | Grid of cells over the city, no gravity | Territory painting (color war: flip a rival's cell, bounce off) + legendary-bird swoops, weather, raids | Marimba map loop, per-team flip pops, bird cries |
 | Ball Battle | Dark neon arena, glow and trails (Python) | Circle, no gravity, +5% speed per bounce | 1v1 spinning-weapon duel with HP | Generated blips, thuds, metal clangs |
 
 **Not used yet:**
 - **Looks:** pixel-art/retro 16-bit, chalkboard doodle, vaporwave, underwater, blueprint, stained glass, newspaper print.
-- **Mechanics:** elimination bracket (head-to-head), king of the hill (stay in a shrinking zone), tug-of-war, gravity flips, a survival countdown where items fall from the sky, territory painting (who covers the most area).
+- **Mechanics:** elimination bracket (head-to-head), king of the hill (stay in a shrinking zone), tug-of-war, gravity flips, a survival countdown where items fall from the sky.
 
 **Next up** (trending ideas the user liked, 2026-10-02; 07 was the first of them):
 - **Escape the rings:** balls in ~50 spinning rings with gaps; each escape breaks a ring and adds balls. "How many rings will break?" Look: vaporwave.
-- **Domain Expansion war** (Jujutsu Kaisen): Gojo, Sukuna, Megumi and Mahito paint territory; DOMAIN EXPANSION paints a big circle. "Who owns the most territory?" Look: stained glass.
+- **Domain Expansion war** (Jujutsu Kaisen): Gojo, Sukuna, Megumi and Mahito paint territory; DOMAIN EXPANSION paints a big circle. "Who owns the most territory?" Look: stained glass. (08 has since used territory painting, so this one needs a different twist.)
 - **Pokémon type war:** rock-paper-scissors swarms (fire > grass > water > fire). "Which starter takes over?" Look: Game Boy pixel art.
 - **Horse Race Test:** horses bounce through a maze toward a carrot. "Which horse gets the carrot?" Look: blueprint or newspaper print.

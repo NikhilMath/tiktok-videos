@@ -1,0 +1,2566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Pokémon GO Team War: Which Team Takes Over the Map?</title>
+<style>
+  /* ---------- Page shell: black, no scrolling, stage centered ---------- */
+  html, body {
+    margin: 0; height: 100%; background: #000; overflow: hidden;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+
+  /* The stage is sized by JS to a 9:16 (or taller) portrait box.
+     --u = CSS pixels per logical unit (logical width is 540). */
+  #stage { position: relative; --u: 1px; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  /* ---------- Recording indicator (on screen only, not in the video) ---------- */
+  #recBadge {
+    position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + var(--u) * 14);
+    transform: translateX(-50%); padding: calc(var(--u) * 6) calc(var(--u) * 14);
+    border-radius: 999px; background: rgba(230, 57, 70, 0.92); color: #fff;
+    font: 800 calc(var(--u) * 14) system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: 0.08em; pointer-events: none;
+  }
+  #recBadge[hidden] { display: none; }
+
+  /* ---------- Buttons (record / mute / settings), Pokémon GO style ---------- */
+  #btns {
+    position: absolute;
+    right: calc(var(--u) * 12);
+    top: calc(env(safe-area-inset-top, 0px) + var(--u) * 10);
+    display: flex; gap: calc(var(--u) * 8);
+  }
+  .iconBtn {
+    width: calc(var(--u) * 38); height: calc(var(--u) * 38);
+    border-radius: 50%; border: 3px solid #39C4B6;
+    background: #FFFFFF; color: #3B5560; cursor: pointer;
+    font-size: calc(var(--u) * 16); line-height: 1; padding: 0;
+    box-shadow: 0 calc(var(--u) * 2) calc(var(--u) * 6) rgba(0, 0, 0, 0.25);
+  }
+  #recBtn.on { background: #E63946; color: #fff; border-color: #fff; }
+
+  /* ---------- Settings panel (white GO card) ---------- */
+  #panel {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: calc(var(--u) * 380); padding: calc(var(--u) * 20);
+    background: #FFFFFF; border-radius: calc(var(--u) * 24);
+    box-shadow: 0 calc(var(--u) * 8) calc(var(--u) * 30) rgba(0, 0, 0, 0.35);
+    color: #3B5560; font: 700 calc(var(--u) * 15) "Avenir Next", Avenir, system-ui, sans-serif;
+  }
+  #panel[hidden] { display: none; }
+  #panel h2 { margin: 0 0 calc(var(--u) * 14); font-size: calc(var(--u) * 22); text-align: center; letter-spacing: 0.06em; }
+  #panel label { display: block; margin-bottom: calc(var(--u) * 14); }
+  #panel label span { float: right; color: #1FA89A; }
+  #panel input[type=range] { width: 100%; margin-top: calc(var(--u) * 6); accent-color: #39C4B6; }
+  .row { display: flex; gap: calc(var(--u) * 10); margin-top: calc(var(--u) * 6); }
+  .row button {
+    flex: 1; padding: calc(var(--u) * 10); cursor: pointer; border-radius: 999px; border: none;
+    font: 800 calc(var(--u) * 14) "Avenir Next", Avenir, system-ui, sans-serif; letter-spacing: 0.04em;
+    color: #FFFFFF; background: linear-gradient(#5FE0A8, #2FB8A0);
+    box-shadow: 0 calc(var(--u) * 3) calc(var(--u) * 6) rgba(0, 0, 0, 0.2);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="recBadge" hidden>● REC 0:00</div>
+
+  <div id="btns">
+    <button class="iconBtn" id="recBtn" aria-label="Record a video">⏺</button>
+    <button class="iconBtn" id="muteBtn" aria-label="Toggle sound">🔊</button>
+    <button class="iconBtn" id="setBtn" aria-label="Settings">⚙️</button>
+  </div>
+
+  <div id="panel" hidden>
+    <h2>SETTINGS</h2>
+    <label>Pokémon speed <span id="vSpeed"></span>
+      <input id="inSpeed" type="range" min="0.5" max="2" step="0.05">
+    </label>
+    <label>Pokémon per team at the start <span id="vStart"></span>
+      <input id="inStart" type="range" min="1" max="6" step="1">
+    </label>
+    <div class="row">
+      <button id="resetBtn">RESTART</button>
+      <button id="closeBtn">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   CONFIG
+   ===================================================================== */
+
+const TAU = Math.PI * 2;
+const DEG = Math.PI / 180;
+const GO = '"Avenir Next", Avenir, "Nunito", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif';
+const INK = '#24313A';        // outlines
+const UI_TEXT = '#3B5560';    // Pokémon GO's teal-grey UI text
+
+// Length of one round. When the clock hits 0:00 everything freezes in place.
+const ROUND_SECONDS = 120;   // 2:00
+
+// Solid black bands at the top and bottom so TikTok's UI never covers the
+// action: 220px on top, ~285px at the bottom of the 1920px video.
+const TOP_SPACE = 110;
+const BOTTOM_SPACE = 142;
+
+// The hook: a comment prompt + question at the top for retention.
+const HOOK = ['Comment below 👇', 'Which TEAM takes', 'over the MAP?'];
+
+/* The three Pokémon GO teams. Every Pokémon on the map belongs to one and
+   paints the map in its color. bird = the team's legendary (it swoops in as
+   an event); weather = the weather that boosts the team. */
+const TEAMS = [
+  { id: 'mystic',   name: 'MYSTIC',   color: '#2F7BF5', light: '#9CC4FF', dark: '#123E8C',
+    bird: 'articuno', birdName: 'ARTICUNO', weather: 'rain', roster: ['squirtle', 'marill', 'poliwag', 'spheal'] },
+  { id: 'valor',    name: 'VALOR',    color: '#EF3434', light: '#FF9A8E', dark: '#8A1212',
+    bird: 'moltres',  birdName: 'MOLTRES',  weather: 'sun',  roster: ['charmander', 'torchic', 'vulpix', 'growlithe'] },
+  { id: 'instinct', name: 'INSTINCT', color: '#FFC400', light: '#FFE37A', dark: '#8F6400',
+    bird: 'zapdos',   birdName: 'ZAPDOS',   weather: 'storm', roster: ['pikachu', 'pichu', 'joltik', 'voltorb'] },
+];
+const NEUTRAL = 3;            // cells Team GO Rocket has wiped (anyone can take them)
+
+const POKE_NAMES = {
+  squirtle: 'Squirtle', marill: 'Marill', poliwag: 'Poliwag', spheal: 'Spheal',
+  charmander: 'Charmander', torchic: 'Torchic', vulpix: 'Vulpix', growlithe: 'Growlithe',
+  pikachu: 'Pikachu', pichu: 'Pichu', joltik: 'Joltik', voltorb: 'Voltorb',
+};
+
+const WEATHERS = {
+  clear: { label: 'CLEAR' },
+  rain:  { label: 'RAIN',  title: 'RAIN!',         team: 0 },
+  sun:   { label: 'SUNNY', title: 'SUNNY!',        team: 1 },
+  storm: { label: 'STORM', title: 'THUNDERSTORM!', team: 2 },
+};
+
+/* The map is a grid of cells, in map units (the map's top-left is 0,0). It sits
+   between x = 16 and 476 on screen so the action stays clear of TikTok's
+   like/comment buttons; the city keeps going (dimmed) to the right edge. */
+const CELL = 10, COLS = 46, ROWS = 52;
+const MW = COLS * CELL, MH = ROWS * CELL;      // 460 × 520
+const MAP_X = 16;
+const BALL_R = 11;
+
+// Gyms (fractions of the map) and PokéStops (map units).
+const GYM_SPOTS = [[0.2, 0.25], [0.79, 0.24], [0.5, 0.52], [0.19, 0.8], [0.8, 0.79]];
+const STOP_SPOTS = [[64, 96], [262, 64], [410, 132], [176, 250], [318, 300], [72, 372], [404, 404], [214, 470], [370, 510]];
+
+// User-tweakable settings (bound to the sliders).
+const Settings = { speed: 1, start: 3 };
+
+/* Tuning knobs, chosen by simulating many rounds in the console (README →
+   "Tune the pacing by simulation"). */
+const TUNING = {
+  speed: 165,            // how fast every Pokémon moves (map units/s)
+  maxBalls: 7,           // most Pokémon one team can have
+  boost: 1.65, boostDur: 8,
+  birdR: 25, birdDur: 2.5,
+  bombR: 30, bombs: 3,
+  lureDur: 7, lurePull: 2.2,
+  raidHP: 9, raidEgg: 2.4, raidDur: 9, raidBurst: 46, raidReward: 2, raidPull: 1.6, raidZone: 56, raidCool: 0.2,
+  spawnCount: 3,
+  gymBurst: 17,
+  eventGap: [8.2, 9.6],
+  finaleAt: 14,          // seconds left when all three legendary birds swoop in
+};
+
+/* =====================================================================
+   CANVAS, SIZING & LAYOUT
+   ===================================================================== */
+
+const stage = document.getElementById('stage');
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const LW = 540;   // logical width; everything is laid out in these units
+let LH = 960;     // logical height (grows on phones taller than 9:16)
+let scale = 1;    // device pixels per logical unit
+const L = {};     // layout
+
+// Laid out top-down inside a 960-tall block (centered on taller phone screens):
+// black band, hook + timer + team score bar, the map, black band.
+function layout() {
+  const block = (LH - 960) / 2;
+  const top = block + TOP_SPACE;
+  L.cx = LW / 2;
+  L.panelTop = top;
+  L.panelBottom = block + 960 - BOTTOM_SPACE;
+  L.hudY = top + 24;                  // timer (left), weather (right), "Comment below" (middle)
+  L.title2 = top + 66;                // hook: big lines
+  L.title3 = top + 110;
+  L.stripY = top + 154;               // team score bar
+  L.mapY = top + 184;                 // map y = 0
+  L.mapCX = MAP_X + MW / 2;
+}
+
+const VIDEO_W = 1080;   // recorded video is 1080×1920 (TikTok's native size)
+
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  let cssW, cssH;
+  if (Recorder.on) {                  // recording: exact 9:16 frame, fitted to the window
+    cssH = Math.min(wh, ww * 16 / 9); cssW = cssH * 9 / 16; LH = 960;
+  } else if (wh / ww >= 16 / 9) {     // tall phone: fill the whole screen
+    cssW = ww; cssH = wh; LH = LW * wh / ww;
+  } else {                            // wider screen: 9:16 box, letterboxed in black
+    cssH = wh; cssW = wh * 9 / 16; LH = 960;
+  }
+  stage.style.width = cssW + 'px';
+  stage.style.height = cssH + 'px';
+  stage.style.setProperty('--u', (cssW / LW) + 'px');
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);   // cap for phone performance
+  scale = Recorder.on ? VIDEO_W / LW : (cssW / LW) * dpr;
+  canvas.width = Math.round(LW * scale);
+  canvas.height = Math.round(LH * scale);
+  layout();
+
+  sprites.clear();                    // everything cached is drawn at device resolution
+  buildBackdrop();
+  buildGridLines();
+}
+
+/* =====================================================================
+   HELPERS
+   ===================================================================== */
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[(Math.random() * arr.length) | 0];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeInOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+// Overshooting pop-in. Exactly 0 at the start: float rounding would otherwise give a
+// tiny negative number, and a negative arc/gradient radius throws and stops the loop.
+const easeOutBack = t => (t <= 0 ? 0 : 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2));
+const blur = px => px * scale;      // shadowBlur ignores the canvas transform
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+// Colors: mix two #rrggbb colors (t = 0 → a, 1 → b).
+function mix(a, b, t) {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = s => Math.round(lerp((pa >> s) & 255, (pb >> s) & 255, t));
+  return '#' + ((1 << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).slice(1);
+}
+const lighten = (c, t) => mix(c, '#FFFFFF', t);
+const darken = (c, t) => mix(c, '#000000', t);
+function rgb(hex) { const p = parseInt(hex.slice(1), 16); return [(p >> 16) & 255, (p >> 8) & 255, p & 255]; }
+function rgba(hex, a) { const [r, g, b] = rgb(hex); return `rgba(${r},${g},${b},${a})`; }
+
+// Set a font that fits `text` into maxW, starting from maxSize.
+function fitFont(g, text, maxW, maxSize, weight = 800, family = GO) {
+  let size = maxSize;
+  g.font = `${weight} ${size}px ${family}`;
+  const w = g.measureText(text).width;
+  if (w > maxW) {
+    size = Math.max(5, size * maxW / w);
+    g.font = `${weight} ${size}px ${family}`;
+  }
+  return size;
+}
+
+function roundRect(g, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+
+// Bold game lettering: dark outline, then the fill (a color or a gradient).
+function goText(g, text, x, y, fill, outline = INK, ow = 6, shadow = 3) {
+  g.lineJoin = 'round';
+  if (shadow) {
+    g.lineWidth = ow;
+    g.strokeStyle = 'rgba(0,0,0,0.28)';
+    g.strokeText(text, x, y + shadow);
+  }
+  g.lineWidth = ow;
+  g.strokeStyle = outline;
+  g.strokeText(text, x, y);
+  g.fillStyle = fill;
+  g.fillText(text, x, y);
+}
+
+// Seeded random numbers, so the city map is the same every time.
+function seeded(seed) {
+  let s = seed;
+  return () => (s = (s * 16807) % 2147483647) / 2147483647;
+}
+
+/* =====================================================================
+   SOUND (Web Audio, synthesized: marimba map music, pops, bird cries)
+   ===================================================================== */
+
+const PENTA = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.51, 1567.98, 1760];
+// I–vi–IV–V in C: [bass, chord tones]
+const CHORDS = [
+  [130.81, [261.63, 329.63, 392.00]], [110.00, [220.00, 261.63, 329.63]],
+  [174.61, [261.63, 349.23, 440.00]], [196.00, [246.94, 293.66, 392.00]],
+];
+const BEAT8 = 60 / 116 / 2;   // eighth notes at 116 bpm
+
+const Sound = {
+  ctx: null, out: null, comp: null, speaker: null, recDest: null, noise: null,
+  muted: false, last: {}, musicNext: 0, musicStep: 0,
+
+  // Called on page load (starts immediately where the browser allows autoplay)
+  // and again on every interaction, so audio starts the moment it's permitted.
+  // Graph: sounds → out → compressor → speaker (mute switch) → speakers
+  //                                  ↘ recDest (video recording, ignores mute)
+  unlock() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      this.ctx = new AC();
+      this.comp = this.ctx.createDynamicsCompressor();
+      this.out = this.ctx.createGain();
+      this.out.gain.value = 1.3;
+      this.speaker = this.ctx.createGain();
+      this.speaker.gain.value = this.muted ? 0 : 1;
+      this.out.connect(this.comp);
+      this.comp.connect(this.speaker);
+      this.speaker.connect(this.ctx.destination);
+      const len = this.ctx.sampleRate;
+      this.noise = this.ctx.createBuffer(1, len, len);
+      const d = this.noise.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    // 'suspended' = blocked by autoplay rules; 'interrupted' = iOS paused it (e.g. a call)
+    if (this.ctx.state !== 'running' && this.ctx.state !== 'closed') this.ctx.resume().catch(() => {});
+  },
+
+  // Audio stream for the video recorder (sound is recorded even when muted).
+  recordStream() {
+    if (!this.ctx || !this.ctx.createMediaStreamDestination) return null;
+    if (!this.recDest) {
+      this.recDest = this.ctx.createMediaStreamDestination();
+      this.comp.connect(this.recDest);
+    }
+    return this.recDest.stream;
+  },
+
+  get running() { return !!this.ctx && this.ctx.state === 'running'; },
+
+  setMuted(m) {
+    this.muted = m;
+    if (this.speaker) this.speaker.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.02);
+  },
+
+  get ready() { return this.running && (!this.muted || Recorder.on); },
+
+  // Rate limit: true if this sound played less than `gap` seconds ago.
+  busy(key, gap) {
+    const now = this.ctx.currentTime;
+    if (now - (this.last[key] || 0) < gap) return true;
+    this.last[key] = now;
+    return false;
+  },
+
+  note(freq, when, dur, type = 'sine', vol = 0.2, freqTo = 0) {
+    const c = this.ctx, t = c.currentTime + when;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t);
+    if (freqTo) o.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.out);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+
+  // Filtered noise. attack > 0 fades in, otherwise it hits instantly.
+  burst(dur, freq, q, vol, freqTo = 0, when = 0, attack = 0, type = 'bandpass') {
+    const c = this.ctx, t = c.currentTime + when;
+    const src = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    src.buffer = this.noise;
+    src.loop = dur > 0.9;
+    f.type = type;
+    f.frequency.setValueAtTime(freq, t);
+    if (freqTo) f.frequency.exponentialRampToValueAtTime(freqTo, t + dur);
+    f.Q.value = q;
+    if (attack > 0) {
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + attack);
+    } else {
+      g.gain.setValueAtTime(vol, t);
+    }
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(this.out);
+    src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.05);
+  },
+
+  // Soft marimba: a sine plus a short bright overtone.
+  marimba(f, when = 0, vol = 0.05, dur = 0.45) {
+    this.note(f, when, dur, 'sine', vol);
+    this.note(f * 4, when, dur * 0.16, 'sine', vol * 0.3);
+  },
+
+  // Background: a light, bouncy "walking around the map" marimba loop.
+  music() {
+    if (!this.ready) { this.musicNext = 0; return; }
+    const now = this.ctx.currentTime;
+    if (this.musicNext < now) this.musicNext = now + 0.05;
+    while (this.musicNext < now + 0.15) {
+      const k = this.musicStep++, bar = CHORDS[Math.floor(k / 8) % CHORDS.length], e = k % 8;
+      const when = this.musicNext - now;
+      if (e === 0 || e === 4) this.note(bar[0], when, 0.4, 'sine', 0.16);
+      const arp = [0, 1, 2, 1, 0, 2, 1, 2][e];
+      this.marimba(bar[1][arp] * 2, when, e % 2 ? 0.03 : 0.045, 0.35);
+      if (e % 2) this.burst(0.03, 9000, 1, 0.025, 0, when, 0, 'highpass');   // shaker
+      this.musicNext += BEAT8;
+    }
+  },
+
+  // A cell changes color: each team has its own little pop.
+  flip(team) {
+    if (!this.ready || this.busy('flip', 0.045)) return;
+    const f = pick(PENTA);
+    if (team === 0) this.note(f * 1.5, 0, 0.14, 'sine', 0.035);            // Mystic: glassy
+    else if (team === 1) this.note(f * 0.5, 0, 0.12, 'triangle', 0.06);    // Valor: warm
+    else this.note(f, 0, 0.05, 'square', 0.014);                           // Instinct: zappy
+  },
+
+  // In-game notification "ba-ding".
+  notify() {
+    if (!this.ready) return;
+    this.note(1318.5, 0, 0.25, 'sine', 0.09);
+    this.note(1760, 0.09, 0.4, 'sine', 0.09);
+  },
+
+  gym(team) {
+    if (!this.ready || this.busy('gym', 0.3)) return;
+    const base = [392, 440, 494][team];
+    [1, 1.25, 1.5].forEach((m, i) => this.note(base * m, i * 0.06, 0.25, 'triangle', 0.06));
+  },
+
+  // Legendary bird swoops in.
+  bird(team) {
+    if (!this.ready) return;
+    this.burst(1.6, 300, 0.8, 0.22, 2400, 0, 0.5);                         // whoosh
+    const c = this.ctx, t = c.currentTime + 0.25;
+    const o = c.createOscillator(), g = c.createGain(), lfo = c.createOscillator(), lg = c.createGain();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(team === 0 ? 1500 : team === 1 ? 1100 : 1300, t);
+    o.frequency.exponentialRampToValueAtTime(team === 0 ? 900 : 600, t + 0.7);
+    lfo.frequency.value = 22; lg.gain.value = 60;
+    lfo.connect(lg); lg.connect(o.frequency);
+    const f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1800; f.Q.value = 1.2;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.1, t + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.75);
+    o.connect(f); f.connect(g); g.connect(this.out);
+    o.start(t); lfo.start(t); o.stop(t + 0.8); lfo.stop(t + 0.8);
+    if (team === 0) [2637, 3136, 3520, 4186].forEach((fr, i) => this.note(fr, 0.4 + i * 0.07, 0.5, 'sine', 0.03));   // ice chimes
+    if (team === 1) this.burst(1.2, 900, 0.5, 0.18, 300, 0.3, 0.2, 'lowpass');                                      // fire roar
+    if (team === 2) for (let i = 0; i < 6; i++) this.burst(0.05, 4000, 2, 0.15, 0, 0.35 + i * 0.07);               // crackle
+  },
+
+  // Team GO Rocket: a sneaky villain motif.
+  rocket() {
+    if (!this.ready) return;
+    [[293.66, 0], [277.18, 0.18], [261.63, 0.36], [207.65, 0.54]].forEach(([f, w]) => this.note(f, w, 0.22, 'square', 0.05));
+    this.note(103.8, 0.54, 0.6, 'sawtooth', 0.06);
+  },
+  bombFall() {
+    if (!this.ready) return;
+    this.note(1600, 0, 0.45, 'sine', 0.05, 500);
+  },
+  explode() {
+    if (!this.ready) return;
+    this.burst(0.7, 1100, 0.6, 0.45, 90);
+    this.note(70, 0, 0.6, 'sine', 0.5, 32);
+  },
+  steal() {
+    if (!this.ready) return;
+    this.note(300, 0, 0.6, 'sine', 0.1, 1800);   // slide whistle up
+  },
+
+  weather(kind) {
+    if (!this.ready) return;
+    if (kind === 'rain') this.burst(TUNING.boostDur, 4500, 0.4, 0.07, 0, 0, 0.8, 'lowpass');
+    if (kind === 'sun') [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => this.note(f, i * 0.06, 1.2, 'triangle', 0.03));
+    if (kind === 'storm') this.thunder();
+  },
+  thunder() {
+    if (!this.ready || this.busy('thunder', 0.4)) return;
+    this.burst(0.08, 5000, 1, 0.25);
+    this.burst(1.4, 260, 0.6, 0.35, 60, 0.05, 0.05, 'lowpass');
+  },
+
+  lure() {
+    if (!this.ready) return;
+    [1046.5, 1318.5, 1568, 2093, 2637].forEach((f, i) => this.note(f, i * 0.05, 0.5, 'sine', 0.05));
+  },
+
+  // Egg wobble and hatch.
+  wobble() {
+    if (!this.ready) return;
+    this.note(420, 0, 0.08, 'triangle', 0.08, 380);
+  },
+  hatch() {
+    if (!this.ready) return;
+    this.burst(0.2, 2500, 1, 0.25, 600);
+    [523.25, 659.25, 783.99].forEach((f, i) => this.note(f, 0.05 + i * 0.07, 0.4, 'triangle', 0.07));
+  },
+  raidHit() {
+    if (!this.ready || this.busy('raidHit', 0.07)) return;
+    this.note(rand(110, 150), 0, 0.12, 'triangle', 0.16, 70);
+    this.burst(0.06, 900, 1.5, 0.12);
+  },
+  raidWin() {
+    if (!this.ready) return;
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => this.note(f, i * 0.09, 0.5, 'square', 0.04));
+    this.note(1046.5, 0.36, 1.0, 'triangle', 0.08);
+  },
+  fled() {
+    if (!this.ready) return;
+    this.burst(0.4, 1500, 1, 0.15, 400);
+    this.note(600, 0, 0.35, 'sine', 0.06, 200);
+  },
+  spawn() {
+    if (!this.ready || this.busy('spawn', 0.08)) return;
+    this.note(880, 0, 0.12, 'sine', 0.08, 1760);
+    this.note(1760, 0.08, 0.2, 'sine', 0.05);
+  },
+
+  tick() {
+    if (!this.ready) return;
+    this.note(1250, 0, 0.06, 'triangle', 0.15);
+    this.burst(0.04, 2400, 6, 0.2);
+  },
+
+  // Winner: a bright fanfare in the winning team's key.
+  win(team) {
+    if (!this.ready) return;
+    const k = [1, 1.122, 1.26][team];
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => this.note(f * k, i * 0.11, 0.35, 'square', 0.04));
+    [261.63, 329.63, 392, 523.25, 659.25].forEach(f => {
+      this.note(f * k, 0.5, 2.4, 'sawtooth', 0.022);
+      this.note(f * k * 1.004, 0.5, 2.4, 'triangle', 0.03);
+    });
+    this.burst(1.2, 6000, 0.7, 0.1, 2500, 0.5);
+    this.note(65.4 * k, 0, 1.2, 'sine', 0.5, 40);
+  },
+};
+
+/* =====================================================================
+   SIMULATION STATE
+   ===================================================================== */
+
+const N_CELLS = COLS * ROWS;
+const grid = new Uint8Array(N_CELLS);           // team index (or NEUTRAL) per cell
+const flipAt = new Float32Array(N_CELLS);       // when each cell last changed (for the pop)
+const counts = [0, 0, 0, 0];                    // cells per team
+
+const S = {
+  balls: [], fx: [], bombs: [], birds: [],
+  gyms: [], stops: [],
+  rocket: null, raid: null, lure: null, weather: null,
+  note: null, banner: null, flash: 0, shake: 0, bolt: null,
+  shown: [1 / 3, 1 / 3, 1 / 3], leader: -1, lastLeader: -1, rosterIdx: [0, 0, 0],
+  flips: [0, 0, 0], deck: [], nextEvent: 0, finale: false, lastBird: -1, floatT: 0,
+  clock: ROUND_SECONDS, lastTick: 0, timeUp: false, winner: -1,
+  time: 0, roundT: 0, acc: 0,
+};
+
+const share = t => counts[t] / N_CELLS;
+const teamBalls = t => S.balls.filter(b => b.team === t && !b.gone);
+function leader() {
+  let best = 0;
+  for (let t = 1; t < 3; t++) if (counts[t] > counts[best]) best = t;
+  return best;
+}
+
+const cellAt = (x, y) => {
+  const c = Math.floor(x / CELL), r = Math.floor(y / CELL);
+  return c < 0 || r < 0 || c >= COLS || r >= ROWS ? -1 : r * COLS + c;
+};
+
+function setCell(i, team) {
+  const old = grid[i];
+  if (old === team) return false;
+  counts[old]--;
+  counts[team]++;
+  grid[i] = team;
+  flipAt[i] = S.time;
+  if (team < 3) S.flips[team]++;
+  return true;
+}
+
+// Paint every cell whose center is inside the circle. Returns how many changed.
+function paintCircle(x, y, rad, team) {
+  let n = 0;
+  const c0 = Math.max(0, Math.floor((x - rad) / CELL)), c1 = Math.min(COLS - 1, Math.floor((x + rad) / CELL));
+  const r0 = Math.max(0, Math.floor((y - rad) / CELL)), r1 = Math.min(ROWS - 1, Math.floor((y + rad) / CELL));
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      const dx = (c + 0.5) * CELL - x, dy = (r + 0.5) * CELL - y;
+      if (dx * dx + dy * dy <= rad * rad && setCell(r * COLS + c, team)) n++;
+    }
+  }
+  return n;
+}
+
+// Middle of a team's territory (where its rivals aim their attacks).
+function centroid(team) {
+  let sx = 0, sy = 0, n = 0;
+  for (let i = 0; i < N_CELLS; i++) {
+    if (grid[i] !== team) continue;
+    sx += (i % COLS + 0.5) * CELL; sy += (Math.floor(i / COLS) + 0.5) * CELL; n++;
+  }
+  return n ? [sx / n, sy / n] : [MW / 2, MH / 2];
+}
+
+// A random spot well inside a team's own territory (for new Pokémon).
+function homeSpot(team) {
+  for (let k = 0; k < 400; k++) {
+    const c = 1 + ((Math.random() * (COLS - 2)) | 0), r = 1 + ((Math.random() * (ROWS - 2)) | 0);
+    let ok = true;
+    for (let dr = -1; dr <= 1 && ok; dr++) for (let dc = -1; dc <= 1 && ok; dc++) ok = grid[(r + dr) * COLS + c + dc] === team;
+    if (ok) return [(c + 0.5) * CELL, (r + 0.5) * CELL];
+  }
+  return centroid(team);
+}
+
+function makeBall(team, x, y) {
+  const T = TEAMS[team];
+  const id = T.roster[S.rosterIdx[team]++ % T.roster.length];
+  const a = rand(0, TAU);
+  return { team, id, x, y, ux: Math.cos(a), uy: Math.sin(a), r: BALL_R, age: 0, hitCool: 0,
+           gone: false, stolen: null };
+}
+
+function addBall(team, x, y, quiet = false) {
+  if (teamBalls(team).length >= TUNING.maxBalls) return null;
+  const b = makeBall(team, clamp(x, BALL_R, MW - BALL_R), clamp(y, BALL_R, MH - BALL_R));
+  S.balls.push(b);
+  if (!quiet) {
+    addRing(b.x, b.y, 4, 30, TEAMS[team].color, 0.5, 5);
+    Sound.spawn();
+  }
+  return b;
+}
+
+// Fresh round: three territories of about the same size, three Pokémon each.
+function startRound() {
+  S.balls = []; S.fx = []; S.bombs = []; S.birds = [];
+  S.rocket = null; S.raid = null; S.lure = null; S.weather = null;
+  S.note = null; S.banner = null; S.flash = 0; S.shake = 0; S.bolt = null;
+  S.rosterIdx = [0, 0, 0]; S.flips = [0, 0, 0];
+  S.finale = false; S.lastBird = -1; S.winner = -1; S.floatT = 0;
+  S.clock = Number(params.get('seconds')) || ROUND_SECONDS;   // ?seconds=10 for quick tests
+  S.lastTick = 0;
+  S.timeUp = false;
+  S.roundT = 0;
+  S.acc = 0;
+  initTerritory();
+  S.gyms = GYM_SPOTS.map(([u, v]) => {
+    const x = (Math.floor(u * COLS) + 0.5) * CELL, y = (Math.floor(v * ROWS) + 0.5) * CELL;
+    return { x, y, team: grid[cellAt(x, y)], pulse: 0 };
+  });
+  S.stops = STOP_SPOTS.map(([x, y]) => ({ x, y, phase: rand(0, TAU), spun: 0 }));
+  for (let t = 0; t < 3; t++) {
+    for (let k = 0; k < Settings.start; k++) { const [x, y] = homeSpot(t); addBall(t, x, y, true); }
+  }
+  for (let t = 0; t < 3; t++) S.shown[t] = share(t);
+  S.leader = leader(); S.lastLeader = S.leader;
+  // Events: a shuffled deck, never the same kind twice in a row, a bird first.
+  const deck = ['bird', 'bird', 'weather', 'weather', 'rocket', 'raid', 'raid', 'spawn', 'spawn', 'lure', 'bird'];
+  do shuffle(deck); while (deck[0] !== 'bird' || deck.some((k, i) => i && k === deck[i - 1]));
+  S.deck = deck;
+  S.nextEvent = 5.5;
+}
+
+/* Three territories: each cell joins the nearest of three seed points (with a
+   little wobble so the borders look organic). Tries a few layouts and keeps
+   the most even one; which team gets which region is random. */
+function initTerritory() {
+  let best = null;
+  for (let k = 0; k < 30; k++) {
+    const a0 = rand(0, TAU), ph = [rand(0, TAU), rand(0, TAU), rand(0, TAU)];
+    const seeds = [0, 1, 2].map(i => {
+      const a = a0 + i * TAU / 3, rr = rand(120, 175);
+      return [MW / 2 + Math.cos(a) * rr * 0.85, MH / 2 + Math.sin(a) * rr];
+    });
+    const owner = new Uint8Array(N_CELLS), cnt = [0, 0, 0];
+    for (let i = 0; i < N_CELLS; i++) {
+      const x = (i % COLS + 0.5) * CELL, y = (Math.floor(i / COLS) + 0.5) * CELL;
+      let bi = 0, bd = Infinity;
+      for (let s = 0; s < 3; s++) {
+        const d = Math.hypot(x - seeds[s][0], y - seeds[s][1]) + 9 * Math.sin(x * 0.05 + ph[s]) * Math.cos(y * 0.043 + ph[(s + 1) % 3]);
+        if (d < bd) { bd = d; bi = s; }
+      }
+      owner[i] = bi; cnt[bi]++;
+    }
+    const dev = Math.max(...cnt.map(c => Math.abs(c / N_CELLS - 1 / 3)));
+    if (!best || dev < best.dev) best = { owner, dev };
+    if (dev < 0.015) break;
+  }
+  const map = shuffle([0, 1, 2]);
+  counts.fill(0);
+  for (let i = 0; i < N_CELLS; i++) { grid[i] = map[best.owner[i]]; counts[grid[i]]++; flipAt[i] = -10; }
+}
+
+/* =====================================================================
+   PHYSICS: every Pokémon moves at a steady speed. When its edge pushes into
+   a cell of another team, that cell flips to its color and it bounces off;
+   cells Team Rocket wiped (neutral) flip without a bounce.
+   ===================================================================== */
+
+const STEP = 1 / 240;   // fixed physics step (4 substeps per 60fps frame)
+const DIRS = [];
+for (let k = 0; k < 12; k++) DIRS.push([Math.cos(k * TAU / 12), Math.sin(k * TAU / 12)]);
+
+function speedOf(b) {
+  let sp = TUNING.speed * Settings.speed;
+  if (S.weather && S.weather.team === b.team) sp *= TUNING.boost;
+  return sp;
+}
+
+function paint(b) {
+  let nx = 0, ny = 0, hits = 0;
+  for (const [dx, dy] of DIRS) {
+    if (dx * b.ux + dy * b.uy <= 0.05) continue;       // only the side it's moving into
+    const i = cellAt(b.x + dx * b.r, b.y + dy * b.r);
+    if (i < 0) continue;
+    const t = grid[i];
+    if (t === b.team) continue;
+    setCell(i, b.team);
+    if (t !== NEUTRAL) { nx += dx; ny += dy; hits++; }
+  }
+  if (!hits) return;
+  const d = Math.hypot(nx, ny);
+  if (d < 1e-6) { nx = b.ux; ny = b.uy; } else { nx /= d; ny /= d; }
+  const vn = b.ux * nx + b.uy * ny;
+  if (vn > 0) { b.ux -= 2 * vn * nx; b.uy -= 2 * vn * ny; }
+  turn(b, rand(-0.12, 0.12));                           // a little wobble so paths never loop
+}
+
+function turn(b, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  const ux = b.ux * c - b.uy * s, uy = b.ux * s + b.uy * c, n = Math.hypot(ux, uy) || 1;
+  b.ux = ux / n; b.uy = uy / n;
+}
+
+function step(dt) {
+  const live = S.balls.filter(b => !b.gone && !b.stolen);
+  const R = S.raid, boss = R && R.phase === 'boss';
+  for (const b of live) {
+    b.hitCool -= dt;
+    // Lure Module and raid bosses: everyone drifts toward them
+    const pull = S.lure ? [S.lure.x, S.lure.y, TUNING.lurePull] : boss ? [R.x, R.y, TUNING.raidPull] : null;
+    if (pull) {
+      const dx = pull[0] - b.x, dy = pull[1] - b.y, d = Math.hypot(dx, dy) || 1;
+      b.ux += dx / d * pull[2] * dt; b.uy += dy / d * pull[2] * dt;
+      const n = Math.hypot(b.ux, b.uy) || 1; b.ux /= n; b.uy /= n;
+    }
+    const sp = speedOf(b);
+    b.x += b.ux * sp * dt; b.y += b.uy * sp * dt;
+    if (b.x < b.r) { b.x = b.r; b.ux = Math.abs(b.ux); }
+    if (b.x > MW - b.r) { b.x = MW - b.r; b.ux = -Math.abs(b.ux); }
+    if (b.y < b.r) { b.y = b.r; b.uy = Math.abs(b.uy); }
+    if (b.y > MH - b.r) { b.y = MH - b.r; b.uy = -Math.abs(b.uy); }
+    paint(b);
+  }
+
+  // Pokémon bump into each other (equal masses, so they swap their head-on motion)
+  for (let i = 0; i < live.length; i++) {
+    const a = live[i];
+    for (let j = i + 1; j < live.length; j++) {
+      const b = live[j];
+      const dx = b.x - a.x, dy = b.y - a.y, rs = a.r + b.r, d2 = dx * dx + dy * dy;
+      if (d2 >= rs * rs) continue;
+      const d = Math.sqrt(d2) || 0.01, nx = dx / d, ny = dy / d, push = (rs - d) / 2;
+      a.x -= nx * push; a.y -= ny * push; b.x += nx * push; b.y += ny * push;
+      const va = a.ux * nx + a.uy * ny, vb = b.ux * nx + b.uy * ny;
+      if (va - vb <= 0) continue;
+      a.ux += (vb - va) * nx; a.uy += (vb - va) * ny;
+      b.ux += (va - vb) * nx; b.uy += (va - vb) * ny;
+      for (const o of [a, b]) { const n = Math.hypot(o.ux, o.uy) || 1; o.ux /= n; o.uy /= n; }
+    }
+  }
+
+  // Raid boss: a big round obstacle; every hit is damage for that Pokémon's team
+  if (boss) {
+    for (const b of live) {
+      const dx = b.x - R.x, dy = b.y - R.y, rs = b.r + R.r, d2 = dx * dx + dy * dy;
+      if (d2 >= rs * rs) continue;
+      const d = Math.sqrt(d2) || 0.01, nx = dx / d, ny = dy / d;
+      b.x = R.x + nx * rs; b.y = R.y + ny * rs;
+      const vn = b.ux * nx + b.uy * ny;
+      if (vn < 0) { b.ux -= 2 * vn * nx; b.uy -= 2 * vn * ny; }
+      if (b.hitCool <= 0) { b.hitCool = TUNING.raidCool; raidHit(b); }
+    }
+  }
+
+  // Gyms change hands when the cell under them does
+  for (const gm of S.gyms) {
+    const t = grid[cellAt(gm.x, gm.y)];
+    if (t !== gm.team && t !== NEUTRAL && !(R && R.gym === gm)) captureGym(gm, t);
+  }
+
+  // PokéStops light up purple when a Pokémon passes by (just for looks)
+  for (const st of S.stops) {
+    if (st.spun > 0) continue;
+    if (live.some(b => (b.x - st.x) ** 2 + (b.y - st.y) ** 2 < 14 * 14)) st.spun = 4;
+  }
+}
+
+function captureGym(gm, team) {
+  gm.team = team;
+  gm.pulse = 1;
+  paintCircle(gm.x, gm.y, TUNING.gymBurst, team);
+  addRing(gm.x, gm.y - 12, 6, 38, TEAMS[team].color, 0.55, 5);
+  if (S.roundT - S.floatT > 0.7) {
+    S.floatT = S.roundT;
+    addFloat(gm.x, gm.y - 34, 'GYM TAKEN!', TEAMS[team].color, 15, 1.0);
+  }
+  Sound.gym(team);
+}
+
+/* =====================================================================
+   EVENTS: something new every ~9 seconds
+   ===================================================================== */
+
+function showNote(title, sub, color, icon, life = 2.6) {
+  S.note = { title, sub, color, icon, life, max: life };
+  Sound.notify();
+}
+
+function runEvent() {
+  let kind = S.deck.shift() || pick(['bird', 'weather', 'spawn']);
+  if (kind === 'raid' && S.raid) kind = 'spawn';
+  if (kind === 'rocket' && S.rocket) kind = 'bird';
+  if (kind === 'lure' && S.lure) kind = 'weather';
+  if (kind === 'weather' && S.weather) kind = 'spawn';
+  ({ bird: () => startBird(pickBirdTeam()), weather: startWeather, rocket: startRocket,
+     raid: startRaid, spawn: startSpawn, lure: startLure })[kind]();
+}
+
+// Legendary birds come to help: the further behind a team is, the likelier its bird.
+function pickBirdTeam() {
+  const w = [0, 1, 2].map(t => (t === S.lastBird ? 0.25 : 1) * Math.pow(1.05 - share(t), 4));
+  let r = rand(0, w[0] + w[1] + w[2]);
+  for (let t = 0; t < 3; t++) { r -= w[t]; if (r <= 0) return t; }
+  return 2;
+}
+
+// A legendary bird swoops across the map, painting a wide stripe in its team's
+// color, aimed through the middle of the biggest rival's territory.
+function startBird(team, delay = 0, quiet = false) {
+  S.lastBird = team;
+  const rivals = [0, 1, 2].filter(t => t !== team).sort((a, b) => counts[b] - counts[a]);
+  const [tx, ty] = centroid(rivals[0]);
+  const ang = rand(0, TAU), ext = 420;
+  const c = Math.cos(ang), s = Math.sin(ang);
+  S.birds.push({ team, t: -delay, dur: TUNING.birdDur, ang, phase: rand(0, TAU),
+                 x0: tx - c * ext, y0: ty - s * ext, x1: tx + c * ext, y1: ty + s * ext,
+                 x: tx - c * ext, y: ty - s * ext, px: null, py: null, cried: false, painted: 0 });
+  if (!quiet) {
+    const T = TEAMS[team];
+    showNote(`${T.birdName} appeared!`, `Team ${cap(T.name)} strikes back!`, T.color, g => drawEmblem(g, team, 0, 0, 22));
+  }
+}
+const cap = s => s[0] + s.slice(1).toLowerCase();
+
+function updateBirds(rdt) {
+  for (const B of S.birds) {
+    B.t += rdt;
+    if (B.t < 0) continue;
+    if (!B.cried) { B.cried = true; Sound.bird(B.team); S.shake = Math.max(S.shake, 4); }
+    const p = clamp(B.t / B.dur, 0, 1);
+    B.x = lerp(B.x0, B.x1, p); B.y = lerp(B.y0, B.y1, p);
+    // paint along the path (in small steps so the stripe has no gaps)
+    if (B.px !== null) {
+      const d = Math.hypot(B.x - B.px, B.y - B.py), n = Math.max(1, Math.ceil(d / 6));
+      for (let k = 1; k <= n; k++) {
+        const x = lerp(B.px, B.x, k / n), y = lerp(B.py, B.y, k / n);
+        if (x > -TUNING.birdR && x < MW + TUNING.birdR && y > -TUNING.birdR && y < MH + TUNING.birdR) {
+          B.painted += paintCircle(x, y, TUNING.birdR, B.team);
+        }
+      }
+      if (Math.random() < rdt * 40 && B.x > 0 && B.x < MW && B.y > 0 && B.y < MH) birdTrail(B);
+    }
+    B.px = B.x; B.py = B.y;
+  }
+  S.birds = S.birds.filter(B => B.t < B.dur);
+}
+
+function birdTrail(B) {
+  const T = TEAMS[B.team];
+  const colors = B.team === 0 ? ['#FFFFFF', '#BFE9FF', '#7FD0FF'] : B.team === 1 ? ['#FFD34A', '#FF8A1F', '#FF4D1F'] : ['#FFF59A', '#FFD000', '#FFFFFF'];
+  const x = B.x - Math.cos(B.ang) * 20 + rand(-14, 14), y = B.y - Math.sin(B.ang) * 20 + rand(-14, 14);
+  S.fx.push({ kind: B.team === 2 ? 'zap' : 'spark', x, y, vx: rand(-40, 40), vy: rand(-40, 40),
+              color: pick(colors), size: rand(2, 4.5), life: rand(0.4, 0.8), max: 0.8, ang: rand(0, TAU) });
+  if (B.team === 0 && Math.random() < 0.3) addRing(x, y, 2, 10, T.light, 0.4, 2);
+}
+
+// Weather boost: one team moves much faster for a few seconds.
+function startWeather(kind) {
+  kind = kind || pick(['rain', 'sun', 'storm']);
+  const W = WEATHERS[kind];
+  S.weather = { kind, team: W.team, t: 0, dur: TUNING.boostDur, boltT: 0.4 };
+  const T = TEAMS[W.team];
+  showNote(W.title, `Team ${cap(T.name)} Pokémon are BOOSTED!`, T.color, g => drawWeatherIcon(g, kind, 0, 0, 1.1));
+  Sound.weather(kind);
+}
+
+// Team GO Rocket: the balloon floats over the leading team, wipes out patches
+// of its territory and steals one of its Pokémon.
+function startRocket() {
+  const lead = leader();
+  const [, cy] = centroid(lead);
+  const dir = Math.random() < 0.5 ? 1 : -1;
+  S.rocket = { t: 0, dur: 6.2, dir, target: lead, y: clamp(cy + rand(-40, 40), 90, MH - 70),
+               x0: dir > 0 ? -80 : MW + 80, x1: dir > 0 ? MW + 80 : -80, x: 0, drops: 0, stole: false, bob: 0 };
+  S.rocket.x = S.rocket.x0;
+  showNote('TEAM GO ROCKET!', `They're after Team ${cap(TEAMS[lead].name)}!`, '#2A2A35', g => drawRocketR(g, 0, 0, 1.1));
+  Sound.rocket();
+}
+
+function updateRocket(rdt) {
+  const R = S.rocket;
+  if (!R) return;
+  R.t += rdt;
+  const p = R.t / R.dur;
+  R.x = lerp(R.x0, R.x1, p);
+  R.bob = Math.sin(R.t * 2.2) * 8;
+  const inMap = R.x > 30 && R.x < MW - 30;
+  // drop bombs over the target team (a little later if it's not under the balloon yet)
+  const due = R.drops < TUNING.bombs && p > 0.2 + R.drops * 0.17;
+  if (due && inMap) {
+    const i = cellAt(R.x, R.y + 30);
+    if ((i >= 0 && grid[i] === R.target) || p > 0.3 + R.drops * 0.17) {
+      R.drops++;
+      S.bombs.push({ x: R.x, y: R.y + 24, t: 0, dur: 0.55 });
+      Sound.bombFall();
+    }
+  }
+  // steal the target team's Pokémon nearest to the balloon
+  if (!R.stole && p > 0.45 && inMap) {
+    R.stole = true;
+    const mine = teamBalls(R.target);
+    if (mine.length > 2) {
+      const b = mine.sort((a, c) => Math.hypot(a.x - R.x, a.y - R.y) - Math.hypot(c.x - R.x, c.y - R.y))[0];
+      b.stolen = { t: 0, x0: b.x, y0: b.y };
+      addFloat(b.x, b.y - 26, `${POKE_NAMES[b.id].toUpperCase()} STOLEN!`, '#E23B3B', 16, 1.3);
+      Sound.steal();
+    }
+  }
+  if (R.t >= R.dur) S.rocket = null;
+}
+
+function updateBombs(rdt) {
+  for (const bm of S.bombs) {
+    bm.t += rdt;
+    if (bm.t >= bm.dur && !bm.done) {
+      bm.done = true;
+      paintCircle(bm.x, bm.y, TUNING.bombR, NEUTRAL);
+      addRing(bm.x, bm.y, 6, TUNING.bombR + 14, '#5B3C88', 0.5, 8);
+      addSparks(bm.x, bm.y, 18, ['#2A2A35', '#E23B3B', '#FFFFFF', '#8A6BC2'], 300);
+      addFloat(bm.x, bm.y - 20, 'BOOM!', '#E23B3B', 18, 0.8);
+      S.shake = Math.max(S.shake, 8);
+      Sound.explode();
+    }
+  }
+  S.bombs = S.bombs.filter(bm => !bm.done);
+  // stolen Pokémon float up into the balloon
+  for (const b of S.balls) {
+    if (!b.stolen || b.gone) continue;
+    b.stolen.t += rdt;
+    const R = S.rocket, tx = R ? R.x : b.stolen.x0, ty = R ? R.y - 20 : b.stolen.y0 - 80;
+    const k = easeInOut(clamp(b.stolen.t / 1.0, 0, 1));
+    b.x = lerp(b.stolen.x0, tx, k); b.y = lerp(b.stolen.y0, ty, k);
+    if (b.stolen.t >= 1.0) b.gone = true;
+  }
+  S.balls = S.balls.filter(b => !b.gone);
+}
+
+// Raid Battle: an egg appears on a gym, hatches a Snorlax, and whichever team
+// hits it most beats the raid and gets new Pokémon.
+function startRaid() {
+  const gm = pick(S.gyms.filter(g => g !== (S.raid && S.raid.gym)));
+  S.raid = { phase: 'egg', t: 0, gym: gm, x: gm.x, y: gm.y - 4, r: 23, hp: TUNING.raidHP, dmg: [0, 0, 0], wob: 0, shake: 0 };
+  showNote('RAID BATTLE!', 'A raid egg is about to hatch!', '#F06BC8', g => drawRaidEgg(g, 0, 2, 0.75, 0));
+}
+
+function raidHit(b) {
+  const R = S.raid;
+  R.dmg[b.team]++;
+  R.hp--;
+  R.shake = 0.2;
+  addSparks(b.x, b.y, 5, [TEAMS[b.team].color, '#FFFFFF'], 200);
+  Sound.raidHit();
+  if (R.hp <= 0) {
+    const team = R.dmg.indexOf(Math.max(...R.dmg));
+    R.phase = 'won'; R.t = 0; R.winner = team;
+    paintCircle(R.x, R.y, TUNING.raidBurst, team);
+    for (let k = 0; k < TUNING.raidReward; k++) addBall(team, R.x + rand(-20, 20), R.y + rand(-20, 20));
+    addRing(R.x, R.y, R.r, TUNING.raidBurst + 20, TEAMS[team].color, 0.7, 10);
+    addSparks(R.x, R.y, 30, [TEAMS[team].color, TEAMS[team].light, '#FFFFFF'], 420);
+    S.flash = 0.2; S.shake = 9;
+    const T = TEAMS[team];
+    showNote(`Team ${cap(T.name)} won the RAID!`, `+${TUNING.raidReward} Pokémon join the team!`, T.color, g => drawEmblem(g, team, 0, 0, 22));
+    Sound.raidWin();
+  }
+}
+
+function updateRaid(rdt) {
+  const R = S.raid;
+  if (!R) return;
+  R.t += rdt;
+  R.shake = Math.max(0, R.shake - rdt);
+  if (R.phase === 'egg') {
+    const k = Math.floor(R.t / 0.6);
+    if (k !== R.wob) { R.wob = k; Sound.wobble(); }
+    if (R.t >= TUNING.raidEgg) {
+      R.phase = 'boss'; R.t = 0;
+      paintCircle(R.x, R.y, TUNING.raidZone, NEUTRAL);       // open raid zone: every team can get in
+      addRing(R.x, R.y, 8, TUNING.raidZone + 10, '#F06BC8', 0.6, 8);
+      addSparks(R.x, R.y, 24, ['#F06BC8', '#FFFFFF', '#FFD23F'], 360);
+      addFloat(R.x, R.y - 40, 'SNORLAX!', '#5E92A4', 20, 1.2);
+      S.shake = 6;
+      Sound.hatch();
+      // anyone hatched on top of gets pushed out of the way
+      for (const b of S.balls) {
+        const dx = b.x - R.x, dy = b.y - R.y, d = Math.hypot(dx, dy) || 1;
+        if (d < R.r + b.r) { b.x = R.x + dx / d * (R.r + b.r + 1); b.y = R.y + dy / d * (R.r + b.r + 1); }
+      }
+    }
+  } else if (R.phase === 'boss') {
+    if (R.t >= TUNING.raidDur) {
+      R.phase = 'fled'; R.t = 0;
+      addFloat(R.x, R.y - 36, 'SNORLAX FLED!', '#5E92A4', 17, 1.2);
+      addSparks(R.x, R.y, 16, ['#FFFFFF', '#CFE3EA'], 260);
+      Sound.fled();
+    }
+  } else if (R.t > 0.6) {
+    S.raid = null;
+  }
+}
+
+// Wild Pokémon appear around the map and join whichever team owns that spot.
+function startSpawn() {
+  showNote('WILD POKÉMON APPEARED!', 'They join whoever owns that spot!', '#39C4B6', g => drawPokeball(g, 0, 0, 15));
+  let made = 0;
+  for (let k = 0; k < 60 && made < TUNING.spawnCount; k++) {
+    const x = rand(30, MW - 30), y = rand(30, MH - 30), t = grid[cellAt(x, y)];
+    if (t === NEUTRAL || teamBalls(t).length >= TUNING.maxBalls) continue;
+    S.fx.push({ kind: 'egg', x, y, team: t, life: 1.1 + made * 0.35, max: 1.1 + made * 0.35 });
+    made++;
+  }
+}
+
+// Lure Module on a PokéStop: every Pokémon is pulled toward it for a while.
+function startLure() {
+  const st = pick(S.stops.filter(s => s.x > 60 && s.x < MW - 60 && s.y > 60 && s.y < MH - 60));
+  S.lure = { x: st.x, y: st.y, t: 0, dur: TUNING.lureDur, stop: st };
+  showNote('LURE MODULE!', 'Every Pokémon rushes to the PokéStop!', '#F27AB8', g => drawLureIcon(g, 0, 0, 1));
+  Sound.lure();
+}
+
+// The finale: all three legendary birds at once.
+function startFinale() {
+  S.finale = true;
+  const order = shuffle([0, 1, 2]);
+  order.forEach((t, i) => startBird(t, i * 0.55, true));
+  showNote('LEGENDARY FINALE!', 'Articuno, Moltres AND Zapdos!', '#8E5BE8', g => drawEmblemTrio(g), 3);
+  S.flash = 0.25;
+}
+
+/* =====================================================================
+   EFFECTS
+   ===================================================================== */
+
+function addRing(x, y, r0, r1, color, life, width) {
+  S.fx.push({ kind: 'ring', x, y, r0, r1, color, life, max: life, width });
+}
+function addSparks(x, y, count, colors, speed) {
+  for (let i = 0; i < count; i++) {
+    const a = rand(0, TAU), s = rand(speed * 0.3, speed), life = rand(0.4, 0.9);
+    S.fx.push({ kind: 'spark', x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+                color: pick(colors), size: rand(2, 4), life, max: life });
+  }
+}
+function addConfetti(count, team) {
+  const T = TEAMS[team];
+  const colors = [T.color, T.light, '#FFFFFF', T.dark];
+  for (let i = 0; i < count; i++) {
+    const life = rand(1.8, 3.2);
+    S.fx.push({ kind: 'confetti', x: rand(0, MW), y: rand(-70, 30), vx: rand(-60, 60), vy: rand(40, 160),
+                spin: rand(-8, 8), a: rand(0, TAU), color: pick(colors), size: rand(4, 8), life, max: life });
+  }
+}
+// Floating text; stacks above any recent text at the same spot instead of overlapping it.
+function addFloat(x, y, text, color, size, life) {
+  for (let k = 0; k < 4; k++) {
+    const clash = S.fx.some(f => f.kind === 'float' && f.max - f.life < 0.7 && Math.abs(f.x - x) < 140 && Math.abs(f.y - y) < 22);
+    if (!clash) break;
+    y -= 24;
+  }
+  S.fx.push({ kind: 'float', x, y, text, color, size, life, max: life });
+}
+
+/* =====================================================================
+   UPDATE
+   ===================================================================== */
+
+function update(rdt) {
+  S.time += rdt;
+
+  // Real-time timers
+  S.flash = Math.max(0, S.flash - rdt * 2.2);
+  S.shake = Math.max(0, S.shake - rdt * 30);
+  if (S.note && (S.note.life -= rdt) <= 0) S.note = null;
+  if (S.banner) S.banner.age += rdt;
+  for (let t = 0; t < 3; t++) S.shown[t] = lerp(S.shown[t], share(t), 1 - Math.exp(-rdt * 6));
+
+  for (const f of S.fx) {
+    f.life -= rdt;
+    if (f.kind === 'spark' || f.kind === 'zap') {
+      f.x += f.vx * rdt; f.y += f.vy * rdt;
+      f.vx *= 0.92; f.vy *= 0.92;
+    } else if (f.kind === 'confetti') {
+      f.vy = Math.min(f.vy + 120 * rdt, 170);
+      f.x += (f.vx + Math.sin(S.time * 3 + f.spin) * 30) * rdt; f.y += f.vy * rdt;
+      f.a += f.spin * rdt;
+    }
+  }
+  if (!S.timeUp) {                                      // eggs from "wild Pokémon" hatch
+    for (const f of S.fx) {
+      if (f.kind !== 'egg' || f.life > 0) continue;
+      const t = grid[cellAt(f.x, f.y)];
+      if (t !== NEUTRAL && addBall(t, f.x, f.y)) addFloat(f.x, f.y - 22, `+1 ${TEAMS[t].name}`, TEAMS[t].color, 14, 0.9);
+    }
+  }
+  S.fx = S.fx.filter(f => f.life > 0);
+
+  // Round clock (wall-clock time, so the video is exactly 2:00)
+  if (!S.timeUp) {
+    S.clock -= rdt;
+    const whole = Math.ceil(S.clock);
+    if (whole !== S.lastTick && whole <= 5 && whole > 0) Sound.tick();
+    S.lastTick = whole;
+    if (S.clock <= 0) endRound();
+    else Sound.music();
+  }
+  if (S.timeUp) { Recorder.tick(rdt); return; }         // frozen: nothing moves
+  S.roundT += rdt;
+
+  // Events
+  if (S.roundT >= S.nextEvent && S.clock > TUNING.finaleAt + 9) {
+    runEvent();
+    S.nextEvent = S.roundT + rand(TUNING.eventGap[0], TUNING.eventGap[1]);
+  }
+  if (!S.finale && S.clock <= TUNING.finaleAt) startFinale();
+
+  if (S.weather) {
+    S.weather.t += rdt;
+    if (S.weather.kind === 'storm' && (S.weather.boltT -= rdt) <= 0) {
+      S.weather.boltT = rand(0.9, 1.6);
+      S.bolt = { x: rand(40, MW - 40), y: rand(MH * 0.3, MH - 40), life: 0.3, seed: Math.random() * 1e6 };
+      S.flash = Math.max(S.flash, 0.18);
+      Sound.thunder();
+    }
+    if (S.weather.t >= S.weather.dur) S.weather = null;
+  }
+  if (S.bolt && (S.bolt.life -= rdt) <= 0) S.bolt = null;
+  if (S.lure && (S.lure.t += rdt) >= S.lure.dur) S.lure = null;
+  for (const st of S.stops) st.spun = Math.max(0, st.spun - rdt);
+  for (const gm of S.gyms) gm.pulse = Math.max(0, gm.pulse - rdt * 1.5);
+  for (const b of S.balls) b.age += rdt;
+
+  updateBirds(rdt);
+  updateRocket(rdt);
+  updateBombs(rdt);
+  updateRaid(rdt);
+
+  // Physics
+  S.acc += rdt;
+  let steps = 0;
+  while (S.acc >= STEP && steps < 12) { step(STEP); S.acc -= STEP; steps++; }
+  if (steps === 12) S.acc = 0;
+
+  // Pops for the cells that changed this frame (one sound, the busiest team)
+  const busiest = S.flips.indexOf(Math.max(...S.flips));
+  if (S.flips[busiest] > 0) Sound.flip(busiest);
+  S.flips = [0, 0, 0];
+
+  // New leader
+  const lead = leader();
+  if (lead !== S.leader) {
+    S.leader = lead;
+    if (S.roundT > 3) addFloat(L.mapCX - MAP_X, 30, `${TEAMS[lead].name} TAKES THE LEAD!`, TEAMS[lead].color, 18, 1.2);
+  }
+}
+
+function endRound() {
+  S.clock = 0;
+  S.timeUp = true;
+  S.winner = leader();
+  S.banner = { team: S.winner, age: 0, shares: [share(0), share(1), share(2)] };
+  S.note = null;
+  S.flash = 0.35;
+  addConfetti(110, S.winner);
+  Sound.win(S.winner);
+}
+
+/* =====================================================================
+   CHARACTERS: every Pokémon is drawn in code (no image files). Drawn in
+   "unit space": the head is a circle of radius 1 centered at (0, 0); line
+   widths are in the same units. getSprite() scales each one to ball size.
+   ===================================================================== */
+
+function circ(g, x, y, r) { g.beginPath(); g.arc(x, y, Math.max(0, r), 0, TAU); }
+function ell(g, x, y, rx, ry, rot = 0) { g.beginPath(); g.ellipse(x, y, Math.max(0, rx), Math.max(0, ry), rot, 0, TAU); }
+function ink(g, fill, w = 0.07) {
+  g.fillStyle = fill;
+  g.fill();
+  g.lineWidth = w;
+  g.strokeStyle = INK;
+  g.stroke();
+}
+function seg(g, x1, y1, x2, y2, w, color = INK) {
+  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2);
+  g.lineWidth = w; g.lineCap = 'round'; g.strokeStyle = color; g.stroke();
+}
+function dot(g, x, y, r, color = INK) { circ(g, x, y, r); g.fillStyle = color; g.fill(); }
+// Round eye: white, pupil, glint.
+function eye(g, x, y, r, pr = r * 0.5, px = 0, py = 0) {
+  circ(g, x, y, r); ink(g, '#FFFFFF', 0.05);
+  dot(g, x + px, y + py, pr);
+  dot(g, x + px - pr * 0.35, y + py - pr * 0.4, pr * 0.35, '#FFFFFF');
+}
+// Small shiny dot eye.
+function beady(g, x, y, r) { dot(g, x, y, r); dot(g, x - r * 0.35, y - r * 0.35, r * 0.38, '#FFFFFF'); }
+// Big cartoon eye: white, colored iris, pupil, glint.
+function bigEye(g, x, y, rx, ry, iris) {
+  ell(g, x, y, rx, ry); ink(g, '#FFFFFF', 0.05);
+  ell(g, x + rx * 0.12, y + ry * 0.18, rx * 0.68, ry * 0.72); g.fillStyle = iris; g.fill();
+  dot(g, x + rx * 0.12, y + ry * 0.25, rx * 0.36, '#111111');
+  dot(g, x - rx * 0.12, y - ry * 0.25, rx * 0.26, '#FFFFFF');
+}
+// Head with a soft light from the top-left.
+function ballBase(g, light, dark) {
+  const gr = g.createRadialGradient(-0.35, -0.42, 0.05, 0, 0, 1.05);
+  gr.addColorStop(0, light);
+  gr.addColorStop(1, dark);
+  circ(g, 0, 0, 1); g.fillStyle = gr; g.fill();
+}
+function inside(g, fn) { g.save(); circ(g, 0, 0, 0.995); g.clip(); fn(); g.restore(); }
+// Outline + glossy sheen.
+function ballDone(g) {
+  const gr = g.createRadialGradient(-0.42, -0.5, 0, -0.42, -0.5, 0.62);
+  gr.addColorStop(0, 'rgba(255,255,255,0.4)');
+  gr.addColorStop(1, 'rgba(255,255,255,0)');
+  circ(g, 0, 0, 1); g.fillStyle = gr; g.fill();
+  circ(g, 0, 0, 1); g.lineWidth = 0.08; g.strokeStyle = INK; g.stroke();
+}
+function smile(g, x0, x1, y, depth, w = 0.08) {
+  g.beginPath(); g.moveTo(x0, y); g.quadraticCurveTo((x0 + x1) / 2, y + depth, x1, y);
+  g.lineWidth = w; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+}
+// Open smiling mouth.
+function openMouth(g, x0, x1, y, depth, color = '#C4473A') {
+  g.beginPath(); g.moveTo(x0, y); g.quadraticCurveTo((x0 + x1) / 2, y + depth, x1, y);
+  g.quadraticCurveTo((x0 + x1) / 2, y + depth * 0.3, x0, y); g.closePath(); ink(g, color, 0.05);
+}
+// A flame (tail flames, Moltres), base at the origin, pointing up.
+function flame(g, w, h, outer = '#FF7B1C', inner = '#FFD34A') {
+  const path = k => {
+    g.beginPath();
+    g.moveTo(0, h * 0.35 * k);
+    g.bezierCurveTo(-w * k, h * 0.25 * k, -w * 0.7 * k, -h * 0.35 * k, 0, -h * k);
+    g.bezierCurveTo(w * 0.15 * k, -h * 0.55 * k, w * k, -h * 0.25 * k, w * 0.75 * k, h * 0.1 * k);
+    g.quadraticCurveTo(w * 0.55 * k, h * 0.4 * k, 0, h * 0.35 * k);
+    g.closePath();
+  };
+  path(1); ink(g, outer, 0.06);
+  path(0.58); g.fillStyle = inner; g.fill();
+}
+
+const FACES = {
+  squirtle(g) {                                        // light-blue turtle, big red-brown eyes
+    ballBase(g, '#C3E9FA', '#4C9ED0');
+    inside(g, () => { ell(g, 0, 1.05, 1.0, 0.46); g.fillStyle = '#F6E7B4'; g.fill(); });
+    for (const s of [-1, 1]) bigEye(g, s * 0.37, -0.12, 0.22, 0.28, '#8A2E1E');
+    openMouth(g, -0.32, 0.32, 0.3, 0.42);
+    ballDone(g);
+  },
+  marill(g) {                                          // blue water mouse with round ears
+    for (const s of [-1, 1]) {
+      circ(g, s * 0.6, -0.8, 0.36); ink(g, '#3F86E0');
+      circ(g, s * 0.6, -0.8, 0.19); g.fillStyle = '#1F4E8E'; g.fill();
+    }
+    ballBase(g, '#B0D5FF', '#3F84DC');
+    inside(g, () => { ell(g, 0, 1.08, 0.78, 0.48); g.fillStyle = '#F7F4EA'; g.fill(); });
+    for (const s of [-1, 1]) beady(g, s * 0.3, -0.12, 0.12);
+    smile(g, -0.15, 0.15, 0.2, 0.13, 0.06);
+    ballDone(g);
+  },
+  poliwag(g) {                                         // tadpole with the belly spiral
+    ballBase(g, '#8EC3F7', '#2F70C6');
+    inside(g, () => {
+      circ(g, 0, 0.62, 0.6); g.fillStyle = '#FFFFFF'; g.fill();
+      g.beginPath();
+      for (let a = 0; a <= 5 * Math.PI; a += 0.12) { const r = 0.03 + a * 0.034; g.lineTo(Math.cos(a) * r, 0.62 + Math.sin(a) * r); }
+      g.lineWidth = 0.08; g.strokeStyle = '#1B1B1B'; g.stroke();
+    });
+    for (const s of [-1, 1]) eye(g, s * 0.33, -0.45, 0.25, 0.11, s * 0.04, 0.03);
+    ell(g, 0, -0.12, 0.13, 0.075); ink(g, '#F4A0B4', 0.04);
+    ballDone(g);
+  },
+  spheal(g) {                                          // round ice seal
+    ballBase(g, '#B2DDF7', '#4E98CF');
+    inside(g, () => {
+      ell(g, 0, 0.82, 0.92, 0.55); g.fillStyle = '#F3EBC8'; g.fill();
+      g.fillStyle = 'rgba(255,255,255,0.6)';
+      for (const [x, y, r] of [[-0.6, -0.5, 0.09], [0.55, -0.6, 0.07], [-0.78, 0.05, 0.07], [0.74, 0, 0.08]]) { circ(g, x, y, r); g.fill(); }
+    });
+    for (const s of [-1, 1]) beady(g, s * 0.32, -0.2, 0.1);
+    ell(g, 0, 0.14, 0.36, 0.2); ink(g, '#FFFFFF', 0.04);
+    ell(g, 0, 0.06, 0.09, 0.055); g.fillStyle = INK; g.fill();
+    for (const s of [-1, 1]) for (const dy of [-0.04, 0.06]) seg(g, s * 0.24, 0.12 + dy, s * 0.52, 0.08 + dy * 1.6, 0.025);
+    smile(g, -0.1, 0.1, 0.24, 0.07, 0.04);
+    ballDone(g);
+  },
+  charmander(g) {                                      // orange lizard with a flaming tail
+    g.save(); g.translate(0.9, 0.48); g.rotate(0.35); flame(g, 0.32, 0.62); g.restore();
+    ballBase(g, '#FFCB8E', '#EA7A30');
+    inside(g, () => { ell(g, 0, 1.08, 0.8, 0.45); g.fillStyle = '#FBE6A2'; g.fill(); });
+    for (const s of [-1, 1]) bigEye(g, s * 0.34, -0.15, 0.18, 0.25, '#1F4E8C');
+    openMouth(g, -0.4, 0.4, 0.3, 0.44);
+    ballDone(g);
+  },
+  torchic(g) {                                         // orange chick with a crest
+    for (const [a, l] of [[-0.4, 0.5], [0, 0.62], [0.4, 0.5]]) {
+      g.save(); g.translate(0, -0.82); g.rotate(a);
+      g.beginPath(); g.moveTo(-0.14, 0.12); g.quadraticCurveTo(0, -l * 1.25, 0.14, 0.12); g.closePath(); ink(g, '#F07A26');
+      g.restore();
+    }
+    ballBase(g, '#FFBB78', '#EE7224');
+    inside(g, () => { ell(g, 0, 1.0, 1.0, 0.5); g.fillStyle = '#FFD84A'; g.fill(); });
+    for (const s of [-1, 1]) beady(g, s * 0.35, -0.15, 0.11);
+    g.beginPath(); g.moveTo(-0.18, 0.06); g.lineTo(0.18, 0.06); g.lineTo(0, 0.36); g.closePath(); ink(g, '#FFD23A', 0.05);
+    seg(g, -0.15, 0.13, 0.15, 0.13, 0.03);
+    ballDone(g);
+  },
+  vulpix(g) {                                          // red fox with orange curls
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.2, -0.8); g.quadraticCurveTo(s * 0.75, -1.45, s * 1.0, -1.05);
+      g.quadraticCurveTo(s * 0.95, -0.6, s * 0.78, -0.42); g.closePath(); ink(g, '#C85A34');
+      g.beginPath(); g.moveTo(s * 0.4, -0.74); g.quadraticCurveTo(s * 0.74, -1.18, s * 0.88, -0.98);
+      g.quadraticCurveTo(s * 0.84, -0.66, s * 0.74, -0.54); g.closePath(); g.fillStyle = '#6B2E1C'; g.fill();
+    }
+    ballBase(g, '#F2A06E', '#BF4F2C');
+    inside(g, () => { ell(g, 0, 1.1, 0.7, 0.45); g.fillStyle = '#F8D7B0'; g.fill(); });
+    ballDone(g);
+    for (const [x, y, r] of [[-0.3, -0.8, 0.22], [0.3, -0.8, 0.22], [0, -0.94, 0.25]]) { circ(g, x, y, r); ink(g, '#F5A040', 0.05); }
+    for (const s of [-1, 1]) bigEye(g, s * 0.33, -0.08, 0.17, 0.2, '#6B3A1E');
+    dot(g, 0, 0.18, 0.05);
+    smile(g, -0.14, 0.14, 0.3, 0.1, 0.05);
+  },
+  growlithe(g) {                                       // orange puppy with black stripes
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.32, -0.78); g.quadraticCurveTo(s * 0.9, -1.2, s * 0.96, -0.52); g.closePath(); ink(g, '#F08A3A');
+    }
+    ballBase(g, '#FFBC74', '#E2702A');
+    inside(g, () => {
+      g.fillStyle = '#2A2523';
+      for (const s of [-1, 1]) for (const y of [-0.35, 0.08]) {
+        g.beginPath(); g.moveTo(s * 1.0, y - 0.09); g.lineTo(s * 0.6, y + 0.02); g.lineTo(s * 1.0, y + 0.13); g.closePath(); g.fill();
+      }
+      ell(g, 0, 0.6, 0.5, 0.36); g.fillStyle = '#F8E4B8'; g.fill();
+    });
+    ballDone(g);
+    for (const [x, y, r] of [[-0.28, -0.86, 0.2], [0.02, -0.97, 0.24], [0.3, -0.84, 0.2]]) { circ(g, x, y, r); ink(g, '#F8E4B8', 0.05); }
+    for (const s of [-1, 1]) beady(g, s * 0.32, -0.12, 0.11);
+    ell(g, 0, 0.4, 0.12, 0.08); g.fillStyle = INK; g.fill();
+    smile(g, -0.16, 0.16, 0.58, 0.1, 0.05);
+  },
+  pikachu(g) {                                         // the one and only
+    for (const s of [-1, 1]) {
+      g.save(); g.translate(s * 0.48, -0.62); g.rotate(s * 0.5);
+      const ear = () => { g.beginPath(); g.moveTo(-0.22, 0.2); g.quadraticCurveTo(-0.2, -0.55, 0, -1.0); g.quadraticCurveTo(0.2, -0.55, 0.22, 0.2); g.closePath(); };
+      ear(); g.fillStyle = '#FFD83A'; g.fill();
+      g.save(); ear(); g.clip(); g.fillStyle = '#26221E'; g.fillRect(-0.4, -1.1, 0.8, 0.42); g.restore();
+      ear(); g.lineWidth = 0.07; g.strokeStyle = INK; g.stroke();
+      g.restore();
+    }
+    ballBase(g, '#FFF27E', '#F2BE18');
+    for (const s of [-1, 1]) { circ(g, s * 0.62, 0.24, 0.2); g.fillStyle = '#EE4235'; g.fill(); }
+    for (const s of [-1, 1]) beady(g, s * 0.34, -0.12, 0.13);
+    dot(g, 0, 0.1, 0.04);
+    g.beginPath(); g.moveTo(-0.18, 0.2); g.quadraticCurveTo(-0.09, 0.32, 0, 0.21); g.quadraticCurveTo(0.09, 0.32, 0.18, 0.2);
+    g.lineWidth = 0.05; g.lineCap = 'round'; g.strokeStyle = INK; g.stroke();
+    ballDone(g);
+  },
+  pichu(g) {                                           // baby Pikachu: big black-rimmed ears
+    for (const s of [-1, 1]) {
+      g.save(); g.translate(s * 0.55, -0.6); g.rotate(s * 0.75);
+      const ear = () => { g.beginPath(); g.moveTo(-0.38, 0.22); g.quadraticCurveTo(-0.38, -0.5, 0, -0.8); g.quadraticCurveTo(0.38, -0.5, 0.38, 0.22); g.closePath(); };
+      ear(); g.fillStyle = '#26221E'; g.fill();
+      g.save(); g.translate(0, 0.08); g.scale(0.74, 0.76); ear(); g.fillStyle = '#FFE15A'; g.fill(); g.restore();
+      ear(); g.lineWidth = 0.06; g.strokeStyle = INK; g.stroke();
+      g.restore();
+    }
+    ballBase(g, '#FFF5A6', '#F2CB2E');
+    for (const s of [-1, 1]) { circ(g, s * 0.6, 0.26, 0.17); g.fillStyle = '#F7A1B4'; g.fill(); }
+    for (const s of [-1, 1]) beady(g, s * 0.33, -0.08, 0.13);
+    dot(g, 0, 0.12, 0.035);
+    smile(g, -0.14, 0.14, 0.24, 0.12, 0.05);
+    ballDone(g);
+  },
+  joltik(g) {                                          // fuzzy yellow tick, four blue eyes
+    g.beginPath();
+    for (let i = 0; i <= 32; i++) { const a = i / 32 * TAU, r = i % 2 ? 1.0 : 1.14; g.lineTo(Math.cos(a) * r, Math.sin(a) * r); }
+    g.closePath(); ink(g, '#F5D23A', 0.06);
+    ballBase(g, '#FFF27E', '#E8C01E');
+    for (const s of [-1, 1]) { circ(g, s * 0.33, 0.02, 0.25); ink(g, '#2F7FD6', 0.05); dot(g, s * 0.38, -0.05, 0.08, '#FFFFFF'); }
+    for (const s of [-1, 1]) { circ(g, s * 0.3, -0.46, 0.12); ink(g, '#2F7FD6', 0.04); }
+    g.beginPath(); g.moveTo(-0.16, 0.38); g.lineTo(0, 0.56); g.lineTo(0.16, 0.38); g.lineTo(0, 0.46); g.closePath(); ink(g, '#2F7FD6', 0.04);
+    ballDone(g);
+  },
+  voltorb(g) {                                         // Poké Ball look-alike, angry eyes
+    ballBase(g, '#FF8578', '#D8262A');
+    inside(g, () => {
+      const wg = g.createLinearGradient(0, 0.08, 0, 1);
+      wg.addColorStop(0, '#FFFFFF'); wg.addColorStop(1, '#C9C9C9');
+      g.fillStyle = wg; g.fillRect(-1.1, 0.08, 2.2, 1.1);
+      seg(g, -1.1, 0.08, 1.1, 0.08, 0.1, INK);
+    });
+    for (const s of [-1, 1]) {
+      g.save(); ell(g, s * 0.36, -0.2, 0.23, 0.21); g.clip();
+      g.fillStyle = '#FFFFFF'; g.fillRect(s * 0.36 - 0.3, -0.45, 0.6, 0.6);
+      dot(g, s * 0.31, -0.13, 0.09, '#111111');
+      g.beginPath(); g.moveTo(s * 0.08, -0.22); g.lineTo(s * 0.64, -0.44); g.lineTo(s * 0.64, -0.7); g.lineTo(s * 0.08, -0.7); g.closePath();
+      g.fillStyle = '#E2343A'; g.fill();
+      g.restore();
+      seg(g, s * 0.1, -0.22, s * 0.6, -0.42, 0.07, INK);
+    }
+    ballDone(g);
+  },
+  snorlax(g) {                                         // the raid boss (sleepy, as always)
+    for (const s of [-1, 1]) {
+      g.beginPath(); g.moveTo(s * 0.3, -0.82); g.lineTo(s * 0.6, -1.17); g.lineTo(s * 0.82, -0.6); g.closePath(); ink(g, '#2F5E6E');
+    }
+    ballBase(g, '#6A9FB1', '#2C5868');
+    inside(g, () => {
+      g.beginPath(); g.moveTo(-0.85, 1); g.bezierCurveTo(-0.95, -0.2, -0.45, -0.62, 0, -0.32);
+      g.bezierCurveTo(0.45, -0.62, 0.95, -0.2, 0.85, 1); g.closePath(); g.fillStyle = '#F2E3BE'; g.fill();
+    });
+    for (const s of [-1, 1]) seg(g, s * 0.15, -0.04, s * 0.5, -0.04, 0.07);
+    g.beginPath(); g.moveTo(-0.32, 0.34); g.quadraticCurveTo(0, 0.5, 0.32, 0.34); g.lineWidth = 0.06; g.strokeStyle = INK; g.stroke();
+    for (const s of [-1, 1]) { g.beginPath(); g.moveTo(s * 0.24, 0.39); g.lineTo(s * 0.18, 0.27); g.lineTo(s * 0.12, 0.41); g.closePath(); ink(g, '#FFFFFF', 0.03); }
+    ballDone(g);
+  },
+};
+
+/* =====================================================================
+   RENDERING
+   ===================================================================== */
+
+// Each Pokémon is pre-rendered once per size.
+const sprites = new Map();
+
+function getSprite(id, r) {
+  const key = `${id}|${r}`;
+  let s = sprites.get(key);
+  if (s) return s;
+  const size = r * 2 * 1.9;                       // room for ears, crests and tails
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size * scale);
+  const g = c.getContext('2d');
+  g.scale(c.width / size, c.height / size);
+  g.translate(size / 2, size / 2);
+  g.scale(r, r);
+  g.lineJoin = 'round';
+  FACES[id](g);
+  s = { canvas: c, size };
+  sprites.set(key, s);
+  return s;
+}
+
+/* The city map (Pokémon GO style): grass, parks, a river, roads and buildings.
+   Drawn once into the backdrop, in map units, extending past the playable grid. */
+const ROADS = [
+  { w: 15, pts: [[-40, 112], [600, 84]] },
+  { w: 15, pts: [[-40, 304], [600, 342]] },
+  { w: 15, pts: [[128, -40], [108, 600]] },
+  { w: 15, pts: [[334, -40], [354, 600]] },
+  { w: 9, pts: [[-40, 206], [236, 214], [600, 190]] },
+  { w: 9, pts: [[232, -40], [244, 600]] },
+  { w: 9, pts: [[-40, 428], [600, 452]] },
+  { w: 9, pts: [[446, -40], [432, 600]] },
+  { w: 7, pts: [[-40, 30], [600, 18]] },
+  { w: 7, pts: [[30, -40], [20, 600]] },
+];
+const PARKS = [
+  { x: 186, y: 150, rx: 50, ry: 40 }, { x: 290, y: 395, rx: 46, ry: 38 }, { x: 70, y: 500, rx: 44, ry: 30 }, { x: 512, y: 250, rx: 40, ry: 60 },
+];
+const RIVER = [[600, 560], [470, 520], [400, 470], [300, 488], [150, 560]];
+
+function distToSeg(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy || 1;
+  const t = clamp(((px - x1) * dx + (py - y1) * dy) / l2, 0, 1);
+  return Math.hypot(px - x1 - dx * t, py - y1 - dy * t);
+}
+function nearRoad(x, y, pad) {
+  return ROADS.some(r => r.pts.some((p, i) => i && distToSeg(x, y, r.pts[i - 1][0], r.pts[i - 1][1], p[0], p[1]) < r.w / 2 + pad));
+}
+function strokePath(g, pts, smooth) {
+  g.beginPath();
+  g.moveTo(pts[0][0], pts[0][1]);
+  if (smooth) {
+    for (let i = 1; i < pts.length - 1; i++) {
+      const mx = (pts[i][0] + pts[i + 1][0]) / 2, my = (pts[i][1] + pts[i + 1][1]) / 2;
+      g.quadraticCurveTo(pts[i][0], pts[i][1], mx, my);
+    }
+    const e = pts[pts.length - 1]; g.lineTo(e[0], e[1]);
+  } else {
+    for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
+  }
+}
+
+function drawCity(g, x0, y0, x1, y1) {
+  g.fillStyle = '#B4E6A0';
+  g.fillRect(x0, y0, x1 - x0, y1 - y0);
+  const rnd = seeded(7);
+  // soft grass texture
+  for (let i = 0; i < 500; i++) {
+    g.fillStyle = rnd() < 0.5 ? 'rgba(255,255,255,0.12)' : 'rgba(60,140,60,0.08)';
+    circ(g, lerp(x0, x1, rnd()), lerp(y0, y1, rnd()), 2 + rnd() * 6); g.fill();
+  }
+  // parks with trees
+  for (const p of PARKS) {
+    ell(g, p.x, p.y, p.rx, p.ry); g.fillStyle = '#93D97F'; g.fill();
+    g.lineWidth = 2; g.strokeStyle = 'rgba(70,150,70,0.35)'; g.stroke();
+    for (let i = 0; i < 9; i++) {
+      const a = rnd() * TAU, d = Math.sqrt(rnd()) * 0.75;
+      const tx = p.x + Math.cos(a) * p.rx * d, ty = p.y + Math.sin(a) * p.ry * d;
+      circ(g, tx + 1.5, ty + 2, 6); g.fillStyle = 'rgba(40,100,50,0.25)'; g.fill();
+      circ(g, tx, ty, 6); g.fillStyle = '#5DBB61'; g.fill();
+      circ(g, tx - 1.5, ty - 1.5, 3); g.fillStyle = '#7FD27C'; g.fill();
+    }
+  }
+  // river
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  strokePath(g, RIVER, true); g.lineWidth = 40; g.strokeStyle = '#C8EEFA'; g.stroke();
+  strokePath(g, RIVER, true); g.lineWidth = 32; g.strokeStyle = '#7CD3F5'; g.stroke();
+  strokePath(g, RIVER, true); g.lineWidth = 10; g.strokeStyle = 'rgba(255,255,255,0.25)'; g.stroke();
+  // buildings (pale blocks with a little 3D side)
+  for (let i = 0; i < 260; i++) {
+    const w = 12 + rnd() * 18, h = 10 + rnd() * 16, x = lerp(x0, x1, rnd()), y = lerp(y0, y1, rnd());
+    const corners = [[x, y], [x + w, y], [x, y + h], [x + w, y + h], [x + w / 2, y + h / 2]];
+    if (corners.some(([cx, cy]) => nearRoad(cx, cy, 5))) continue;
+    if (PARKS.some(p => ((x + w / 2 - p.x) / (p.rx + 10)) ** 2 + ((y + h / 2 - p.y) / (p.ry + 10)) ** 2 < 1)) continue;
+    if (RIVER.some((p, k) => k && distToSeg(x + w / 2, y + h / 2, RIVER[k - 1][0], RIVER[k - 1][1], p[0], p[1]) < 34)) continue;
+    roundRect(g, x + 2, y + 3, w, h, 3); g.fillStyle = 'rgba(120,130,110,0.25)'; g.fill();
+    roundRect(g, x, y, w, h, 3); g.fillStyle = rnd() < 0.5 ? '#ECE9DC' : '#E3E0D2'; g.fill();
+    g.lineWidth = 1; g.strokeStyle = 'rgba(150,150,130,0.45)'; g.stroke();
+  }
+  // roads: soft edge, white top, faint center line on the big ones
+  for (const r of ROADS) { strokePath(g, r.pts, false); g.lineWidth = r.w + 4; g.strokeStyle = '#D9D2AE'; g.stroke(); }
+  for (const r of ROADS) { strokePath(g, r.pts, false); g.lineWidth = r.w; g.strokeStyle = '#FFFDF2'; g.stroke(); }
+  g.save(); g.setLineDash([7, 8]);
+  for (const r of ROADS.filter(r => r.w >= 15)) { strokePath(g, r.pts, false); g.lineWidth = 1.2; g.strokeStyle = '#F2D98A'; g.stroke(); }
+  g.restore();
+}
+
+let backdrop = null;
+function buildBackdrop() {
+  backdrop = document.createElement('canvas');
+  backdrop.width = canvas.width;
+  backdrop.height = canvas.height;
+  const g = backdrop.getContext('2d');
+  g.scale(scale, scale);
+
+  // Sky above the map, like the horizon in Pokémon GO
+  const horizon = L.stripY + 26;
+  const sky = g.createLinearGradient(0, L.panelTop, 0, horizon);
+  sky.addColorStop(0, '#4FB7EE');
+  sky.addColorStop(0.7, '#9AD9F6');
+  sky.addColorStop(1, '#DDF4FB');
+  g.fillStyle = sky;
+  g.fillRect(0, 0, LW, horizon + 2);
+  const cloud = (x, y, k) => {
+    g.fillStyle = 'rgba(255,255,255,0.85)';
+    for (const [dx, dy, r] of [[-26, 4, 14], [-8, -6, 18], [14, -2, 15], [30, 6, 11], [0, 8, 13]]) { circ(g, x + dx * k, y + dy * k, r * k); g.fill(); }
+  };
+  cloud(56, L.title2 + 2, 0.9); cloud(486, L.title2 + 14, 0.8); cloud(150, L.stripY - 6, 0.6); cloud(400, L.title3 + 18, 0.7);
+
+  // The city, from the horizon down
+  g.save();
+  g.beginPath(); g.rect(0, horizon - 14, LW, L.panelBottom - horizon + 14); g.clip();
+  g.translate(MAP_X, L.mapY);
+  drawCity(g, -MAP_X - 10, horizon - 14 - L.mapY, LW - MAP_X + 10, L.panelBottom - L.mapY + 10);
+  g.restore();
+  // horizon haze
+  const haze = g.createLinearGradient(0, horizon - 14, 0, L.mapY + 4);
+  haze.addColorStop(0, 'rgba(221,244,251,1)');
+  haze.addColorStop(1, 'rgba(221,244,251,0)');
+  g.fillStyle = haze;
+  g.fillRect(0, horizon - 14, LW, L.mapY + 4 - horizon + 14);
+
+  // Dim the city outside the playable map, then a white frame around it
+  g.save();
+  g.beginPath();
+  g.rect(0, L.mapY - 8, LW, L.panelBottom - L.mapY + 8);
+  roundRect(g, MAP_X, L.mapY, MW, MH, 6);
+  g.fillStyle = 'rgba(240,250,245,0.5)';
+  g.fill('evenodd');
+  g.restore();
+  g.save();
+  g.shadowColor = 'rgba(20,50,40,0.35)'; g.shadowBlur = blur(8); g.shadowOffsetY = 2 * scale;
+  roundRect(g, MAP_X - 2, L.mapY - 2, MW + 4, MH + 4, 8);
+  g.lineWidth = 4; g.strokeStyle = '#FFFFFF'; g.stroke();
+  g.restore();
+
+  // The hook: bold white game lettering, the last line in all three team colors
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  fitFont(g, HOOK[0], 250, 18, 800);
+  roundRect(g, L.cx - 100, L.hudY - 15, 200, 30, 15); g.fillStyle = 'rgba(255,255,255,0.92)'; g.fill();
+  g.fillStyle = UI_TEXT; g.fillText(HOOK[0], L.cx, L.hudY + 1);
+  fitFont(g, HOOK[1], 470, 44, 900);
+  goText(g, HOOK[1], L.cx, L.title2, '#FFFFFF', '#183A63', 9, 4);
+  fitFont(g, HOOK[2], 470, 50, 900);
+  const w = g.measureText(HOOK[2]).width;
+  const tri = g.createLinearGradient(L.cx - w / 2, 0, L.cx + w / 2, 0);
+  tri.addColorStop(0, '#4D95FF'); tri.addColorStop(0.32, '#4D95FF');
+  tri.addColorStop(0.36, '#FF4A4A'); tri.addColorStop(0.64, '#FF4A4A');
+  tri.addColorStop(0.68, '#FFD02A'); tri.addColorStop(1, '#FFD02A');
+  goText(g, HOOK[2], L.cx, L.title3, tri, '#183A63', 9, 4);
+}
+
+// Faint cell grid over the map (drawn above the team colors).
+let gridLines = null;
+function buildGridLines() {
+  gridLines = document.createElement('canvas');
+  gridLines.width = Math.ceil(MW * scale);
+  gridLines.height = Math.ceil(MH * scale);
+  const g = gridLines.getContext('2d');
+  g.scale(scale, scale);
+  g.strokeStyle = 'rgba(255,255,255,0.2)';
+  g.lineWidth = 0.6;
+  g.beginPath();
+  for (let c = 1; c < COLS; c++) { g.moveTo(c * CELL, 0); g.lineTo(c * CELL, MH); }
+  for (let r = 1; r < ROWS; r++) { g.moveTo(0, r * CELL); g.lineTo(MW, r * CELL); }
+  g.stroke();
+}
+
+// The team colors: one pixel per cell, scaled up with crisp edges.
+const terrCanvas = document.createElement('canvas');
+terrCanvas.width = COLS; terrCanvas.height = ROWS;
+const terrCtx = terrCanvas.getContext('2d');
+const terrImg = terrCtx.createImageData(COLS, ROWS);
+const CELL_RGB = TEAMS.map(t => rgb(t.color)).concat([[52, 36, 74]]);
+const CELL_A = [150, 150, 175, 135];
+
+function drawTerritory() {
+  const d = terrImg.data;
+  for (let i = 0; i < N_CELLS; i++) {
+    const t = grid[i], c = CELL_RGB[t], age = S.time - flipAt[i];
+    const k = age < 0.3 && age >= 0 ? (1 - age / 0.3) * 0.75 : 0;   // white pop when it just flipped
+    const j = i * 4;
+    d[j] = c[0] + (255 - c[0]) * k;
+    d[j + 1] = c[1] + (255 - c[1]) * k;
+    d[j + 2] = c[2] + (255 - c[2]) * k;
+    d[j + 3] = CELL_A[t] + (235 - CELL_A[t]) * k;
+  }
+  terrCtx.putImageData(terrImg, 0, 0);
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(terrCanvas, 0, 0, MW, MH);
+  ctx.restore();
+  ctx.drawImage(gridLines, 0, 0, MW, MH);
+
+  // Borders between territories: a dark edge with a white line on top
+  ctx.beginPath();
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const i = r * COLS + c, t = grid[i];
+      if (c < COLS - 1 && grid[i + 1] !== t) { ctx.moveTo((c + 1) * CELL, r * CELL); ctx.lineTo((c + 1) * CELL, (r + 1) * CELL); }
+      if (r < ROWS - 1 && grid[i + COLS] !== t) { ctx.moveTo(c * CELL, (r + 1) * CELL); ctx.lineTo((c + 1) * CELL, (r + 1) * CELL); }
+    }
+  }
+  ctx.lineCap = 'square';
+  ctx.lineWidth = 3.2; ctx.strokeStyle = 'rgba(20,30,40,0.3)'; ctx.stroke();
+  ctx.lineWidth = 1.4; ctx.strokeStyle = 'rgba(255,255,255,0.92)'; ctx.stroke();
+}
+
+// Team emblems: a snowflake (Mystic/Articuno), a flame (Valor/Moltres),
+// a lightning bolt (Instinct/Zapdos), white on the team color.
+function drawEmblem(g, team, x, y, r) {
+  const T = TEAMS[team];
+  g.save();
+  g.translate(x, y);
+  circ(g, 0, 0, r + 2); g.fillStyle = '#FFFFFF'; g.fill();
+  const gr = g.createRadialGradient(-r * 0.3, -r * 0.4, r * 0.1, 0, 0, r);
+  gr.addColorStop(0, lighten(T.color, 0.3)); gr.addColorStop(1, T.color);
+  circ(g, 0, 0, r); g.fillStyle = gr; g.fill();
+  g.scale(r / 10, r / 10);
+  g.fillStyle = '#FFFFFF'; g.strokeStyle = '#FFFFFF'; g.lineCap = 'round'; g.lineJoin = 'round';
+  if (team === 0) {
+    g.lineWidth = 1.8;
+    for (let k = 0; k < 6; k++) {
+      g.save(); g.rotate(k * TAU / 6);
+      g.beginPath(); g.moveTo(0, 0); g.lineTo(0, -6.5); g.moveTo(0, -4); g.lineTo(-2, -5.8); g.moveTo(0, -4); g.lineTo(2, -5.8); g.stroke();
+      g.restore();
+    }
+  } else if (team === 1) {
+    g.beginPath(); g.moveTo(0, 6.5); g.bezierCurveTo(-6, 5, -6, -1, -2, -4); g.quadraticCurveTo(-2, -1, 0, 0);
+    g.quadraticCurveTo(-1, -5, 2, -7.5); g.quadraticCurveTo(1.5, -3, 4.5, -1); g.bezierCurveTo(7, 2, 5, 6, 0, 6.5); g.fill();
+  } else {
+    g.beginPath(); g.moveTo(1.5, -7.5); g.lineTo(-4.5, 1); g.lineTo(-0.5, 1); g.lineTo(-2, 7.5); g.lineTo(4.5, -1.5); g.lineTo(0.5, -1.5); g.closePath(); g.fill();
+  }
+  g.restore();
+}
+function drawEmblemTrio(g) {
+  drawEmblem(g, 0, -11, 6, 11); drawEmblem(g, 1, 11, 6, 11); drawEmblem(g, 2, 0, -9, 11);
+}
+
+// A Poké Ball icon.
+function drawPokeball(g, x, y, r) {
+  g.save(); g.translate(x, y);
+  circ(g, 0, 0, r); g.fillStyle = '#FFFFFF'; g.fill();
+  g.beginPath(); g.arc(0, 0, r, Math.PI, TAU); g.closePath(); g.fillStyle = '#EE3B3B'; g.fill();
+  g.lineWidth = r * 0.14; g.strokeStyle = INK;
+  g.beginPath(); g.moveTo(-r, 0); g.lineTo(r, 0); g.stroke();
+  circ(g, 0, 0, r); g.stroke();
+  circ(g, 0, 0, r * 0.32); g.fillStyle = '#FFFFFF'; g.fill(); g.stroke();
+  g.restore();
+}
+
+function drawRocketR(g, x, y, k) {
+  g.save(); g.translate(x, y); g.scale(k, k);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = `900 26px ${GO}`;
+  g.lineWidth = 5; g.lineJoin = 'round'; g.strokeStyle = '#FFFFFF'; g.strokeText('R', 0, 1);
+  g.fillStyle = '#E23B3B'; g.fillText('R', 0, 1);
+  g.restore();
+}
+
+function drawLureIcon(g, x, y, k) {
+  g.save(); g.translate(x, y); g.scale(k, k);
+  for (let i = 0; i < 5; i++) {
+    g.save(); g.rotate(i * TAU / 5);
+    ell(g, 0, -7, 4.5, 7); g.fillStyle = '#FFFFFF'; g.fill();
+    g.restore();
+  }
+  circ(g, 0, 0, 4); g.fillStyle = '#FFD23F'; g.fill();
+  g.restore();
+}
+
+// Weather icons: sun, rain cloud, storm cloud.
+function drawWeatherIcon(g, kind, x, y, k) {
+  g.save(); g.translate(x, y); g.scale(k, k);
+  const cloud = (col) => {
+    g.fillStyle = col;
+    for (const [dx, dy, r] of [[-6, 2, 6], [0, -3, 8], [7, 1, 6.5], [0, 4, 6]]) { circ(g, dx, dy, r); g.fill(); }
+  };
+  if (kind === 'sun' || kind === 'clear') {
+    g.strokeStyle = '#FFB300'; g.lineWidth = 2.4; g.lineCap = 'round';
+    for (let i = 0; i < 8; i++) { const a = i * TAU / 8; seg(g, Math.cos(a) * 10, Math.sin(a) * 10, Math.cos(a) * 14, Math.sin(a) * 14, 2.4, '#FFB300'); }
+    circ(g, 0, 0, 8); g.fillStyle = '#FFD23F'; g.fill(); g.lineWidth = 1.5; g.strokeStyle = '#F2A000'; g.stroke();
+  } else if (kind === 'rain') {
+    for (const dx of [-6, 0, 6]) seg(g, dx, 8, dx - 2.5, 14, 2.2, '#2F7BF5');
+    g.translate(0, -2); cloud('#FFFFFF');
+  } else {
+    g.translate(0, -2); cloud('#C9CFDA');
+    g.beginPath(); g.moveTo(1, 4); g.lineTo(-4, 12); g.lineTo(0, 12); g.lineTo(-2, 18); g.lineTo(5, 9); g.lineTo(1, 9); g.closePath();
+    g.fillStyle = '#FFC400'; g.fill(); g.lineWidth = 1; g.strokeStyle = '#8F6400'; g.stroke();
+  }
+  g.restore();
+}
+
+// Raid egg: pink with a glossy highlight, wobbling.
+function drawRaidEgg(g, x, y, k, wob) {
+  g.save(); g.translate(x, y); g.rotate(wob); g.scale(k, k);
+  ell(g, 0, 0, 17, 22);
+  const gr = g.createRadialGradient(-6, -10, 2, 0, 0, 24);
+  gr.addColorStop(0, '#FFC4EA'); gr.addColorStop(1, '#E0489E');
+  g.fillStyle = gr; g.fill(); g.lineWidth = 2.5; g.strokeStyle = INK; g.stroke();
+  g.fillStyle = 'rgba(255,255,255,0.65)';
+  for (const [dx, dy, r] of [[-7, 4, 3.5], [6, -4, 3], [4, 10, 2.5]]) { circ(g, dx, dy, r); g.fill(); }
+  g.restore();
+}
+
+// Legendary birds, seen from above, flying along +x. len = wing length (flaps).
+function wingPath(g, s, len, style, t) {
+  const tip = [-14, s * len], root = [-20, s * 7], N = 5;
+  g.beginPath();
+  g.moveTo(9, s * 5);
+  g.quadraticCurveTo(4, s * len * 0.62, tip[0], tip[1]);
+  for (let i = 1; i <= N; i++) {
+    const ax = lerp(tip[0], root[0], (i - 1) / N), ay = lerp(tip[1], root[1], (i - 1) / N);
+    const bx = lerp(tip[0], root[0], i / N), by = lerp(tip[1], root[1], i / N);
+    const mx = (ax + bx) / 2, my = (ay + by) / 2;
+    if (style === 'spike') { g.lineTo(mx - 22 + i * 2.5, my - s * 2); g.lineTo(bx, by); }
+    else if (style === 'flame') { const f = 16 + 6 * Math.sin(t * 17 + i * 1.9); g.quadraticCurveTo(ax - f * 0.5, ay, mx - f, my); g.quadraticCurveTo(bx - f * 0.2, by, bx, by); }
+    else g.quadraticCurveTo(mx - 13, my, bx, by);
+  }
+  g.closePath();
+}
+const BIRDS = {
+  articuno(g, len, t) {
+    for (const s of [-1, 1]) {                               // two long tail streamers
+      g.beginPath(); g.moveTo(-18, s * 3);
+      g.bezierCurveTo(-45, s * (9 + 6 * Math.sin(t * 6)), -64, s * (-3 + 6 * Math.sin(t * 6 + 1)), -92, s * (6 + 8 * Math.sin(t * 6 + 2)));
+      g.lineCap = 'round'; g.lineWidth = 8; g.strokeStyle = INK; g.stroke();
+      g.lineWidth = 5.5; g.strokeStyle = '#2E64B8'; g.stroke();
+    }
+    for (const s of [-1, 1]) {
+      wingPath(g, s, len, 'scallop', t); ink(g, '#B4E3FA', 2);
+      g.save(); wingPath(g, s, len, 'scallop', t); g.clip();
+      g.strokeStyle = 'rgba(46,100,184,0.35)'; g.lineWidth = 1.5;
+      for (let k = 1; k < 4; k++) { g.beginPath(); g.moveTo(4 - k * 6, s * 6); g.lineTo(-10 - k * 3, s * len); g.stroke(); }
+      g.restore();
+    }
+    ell(g, 0, 0, 25, 11); ink(g, '#94D3F3', 2);
+    circ(g, 23, 0, 9.5); ink(g, '#B4E3FA', 2);
+    g.beginPath(); g.moveTo(27, 0); g.bezierCurveTo(14, -11, -2, -7, -14, -2); g.bezierCurveTo(-2, 2, 14, 7, 27, 0); ink(g, '#2E64B8', 1.6);
+    g.beginPath(); g.moveTo(30, -3.5); g.lineTo(39, 0); g.lineTo(30, 3.5); g.closePath(); ink(g, '#8C99A6', 1.4);
+    for (const s of [-1, 1]) dot(g, 26, s * 5.5, 2, '#D7263D');
+  },
+  moltres(g, len, t) {
+    for (let i = -2; i <= 2; i++) {                          // flame tail
+      g.save(); g.translate(-20, i * 4); g.rotate(-Math.PI / 2 + i * 0.22);
+      g.scale(1, 1.6 + 0.3 * Math.sin(t * 18 + i));
+      flame(g, 7, 22, '#FF5A1F', '#FFD34A');
+      g.restore();
+    }
+    for (const s of [-1, 1]) {
+      g.save(); g.translate(-3, 0); wingPath(g, s, len + 4, 'flame', t); g.fillStyle = '#FF6A1F'; g.fill(); g.restore();
+      wingPath(g, s, len, 'scallop', t); ink(g, '#FBC83F', 2);
+    }
+    ell(g, 0, 0, 25, 11); ink(g, '#F7B733', 2);
+    circ(g, 23, 0, 9.5); ink(g, '#FBC83F', 2);
+    for (let i = -1; i <= 1; i++) {                          // flaming crest
+      g.save(); g.translate(18, i * 4); g.rotate(-Math.PI / 2 + i * 0.3);
+      g.scale(0.8, 1.2 + 0.25 * Math.sin(t * 20 + i * 2));
+      flame(g, 6, 18, '#FF5A1F', '#FFE07A');
+      g.restore();
+    }
+    g.beginPath(); g.moveTo(30, -3.5); g.lineTo(39, 0); g.lineTo(30, 3.5); g.closePath(); ink(g, '#C9752A', 1.4);
+    for (const s of [-1, 1]) dot(g, 26, s * 5.5, 2, '#2A1A10');
+  },
+  zapdos(g, len, t) {
+    g.beginPath(); g.moveTo(-16, -7);                        // spiky tail fan
+    for (let i = 0; i <= 6; i++) { const a = -0.7 + i * 0.233; g.lineTo(-16 - 30 * Math.cos(a), 26 * Math.sin(a) * 1.2); g.lineTo(-22 - 12 * Math.cos(a + 0.12), 14 * Math.sin(a + 0.12)); }
+    g.lineTo(-16, 7); g.closePath(); ink(g, '#FFD21C', 2);
+    for (const s of [-1, 1]) {
+      wingPath(g, s, len, 'spike', t); ink(g, '#FFD21C', 2);
+      g.save(); wingPath(g, s, len, 'spike', t); g.clip();
+      g.fillStyle = 'rgba(40,30,10,0.85)';
+      for (let k = 0; k < 3; k++) { g.beginPath(); g.moveTo(-6 - k * 5, s * (14 + k * 12)); g.lineTo(-26 - k * 4, s * (12 + k * 12)); g.lineTo(-14 - k * 5, s * (20 + k * 12)); g.closePath(); g.fill(); }
+      g.restore();
+    }
+    ell(g, 0, 0, 25, 11); ink(g, '#FFD21C', 2);
+    g.beginPath(); g.moveTo(16, -9);                         // spiky head
+    for (let i = 0; i < 5; i++) { const a = -1.2 + i * 0.6; g.lineTo(23 + 9.5 * Math.cos(a), 9.5 * Math.sin(a)); g.lineTo(8 - i * 0.5, -8 + i * 4); }
+    g.lineTo(16, 9); g.closePath(); ink(g, '#FFD21C', 2);
+    circ(g, 23, 0, 9.5); ink(g, '#FFD21C', 2);
+    g.beginPath(); g.moveTo(29, -3.5); g.lineTo(44, 0); g.lineTo(29, 3.5); g.closePath(); ink(g, '#F2902B', 1.4);
+    for (const s of [-1, 1]) dot(g, 25, s * 5.5, 2, '#111111');
+  },
+};
+
+function drawBird(B) {
+  if (B.t < 0) return;
+  const T = TEAMS[B.team];
+  const flap = Math.sin(S.time * 12 + B.phase);
+  const len = 58 * (0.8 + 0.2 * flap);
+  ctx.save();                                             // shadow on the map below
+  ctx.translate(B.x + 16, B.y + 26); ctx.rotate(B.ang);
+  ctx.globalAlpha = 0.2; ctx.fillStyle = '#0D2A1E';
+  ell(ctx, 0, 0, 26, 10); ctx.fill();
+  ell(ctx, -6, 0, 11, len); ctx.fill();
+  ctx.restore();
+  ctx.save();                                             // glow
+  ctx.globalAlpha = 0.35;
+  const gl = ctx.createRadialGradient(B.x, B.y, 0, B.x, B.y, 70);
+  gl.addColorStop(0, T.light); gl.addColorStop(1, rgba(T.light, 0));
+  ctx.fillStyle = gl; circ(ctx, B.x, B.y, 70); ctx.fill();
+  ctx.restore();
+  ctx.save();
+  ctx.translate(B.x, B.y); ctx.rotate(B.ang);
+  ctx.lineJoin = 'round';
+  BIRDS[T.bird](ctx, len, S.time);
+  ctx.restore();
+}
+
+// Team GO Rocket's Meowth balloon.
+function drawRocket(R) {
+  const x = R.x, y = R.y + R.bob;
+  ctx.save();
+  ctx.globalAlpha = 0.22; ctx.fillStyle = '#0D2A1E';
+  ell(ctx, x + 18, R.y + 44, 26, 10); ctx.fill();
+  ctx.restore();
+  ctx.save(); ctx.translate(x, y - 22);
+  // ropes and basket
+  for (const s of [-1, 1]) seg(ctx, s * 18, 18, s * 9, 36, 1.4, '#5A4632');
+  roundRect(ctx, -12, 34, 24, 14, 3); ctx.fillStyle = '#9A6B3E'; ctx.fill(); ctx.lineWidth = 1.6; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.strokeStyle = 'rgba(60,40,20,0.5)'; ctx.lineWidth = 1;
+  for (const yy of [38.5, 43]) { ctx.beginPath(); ctx.moveTo(-11, yy); ctx.lineTo(11, yy); ctx.stroke(); }
+  drawRocketR(ctx, 0, 41, 0.45);
+  // ears
+  for (const s of [-1, 1]) {
+    ctx.beginPath(); ctx.moveTo(s * 12, -24); ctx.lineTo(s * 30, -36); ctx.lineTo(s * 28, -10); ctx.closePath(); ink(ctx, '#F3E3B5', 1.8);
+    ctx.beginPath(); ctx.moveTo(s * 16, -22); ctx.lineTo(s * 27, -30); ctx.lineTo(s * 26, -14); ctx.closePath(); ctx.fillStyle = '#5A3A2A'; ctx.fill();
+  }
+  // head balloon
+  const gr = ctx.createRadialGradient(-10, -12, 4, 0, 0, 32);
+  gr.addColorStop(0, '#FFF6DA'); gr.addColorStop(1, '#E2C98C');
+  circ(ctx, 0, 0, 30); ctx.fillStyle = gr; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = INK; ctx.stroke();
+  ell(ctx, 0, -17, 7, 6.5); ink(ctx, '#F5C542', 1.6);       // charm coin
+  ell(ctx, 0, -17, 3.5, 3); ctx.fillStyle = '#FFE58A'; ctx.fill();
+  for (const s of [-1, 1]) {
+    ell(ctx, s * 11, -2, 5.5, 7); ink(ctx, '#FFFFFF', 1.4);
+    ell(ctx, s * 11, -1, 1.6, 5); ctx.fillStyle = '#111111'; ctx.fill();
+    for (const dy of [-3, 1, 5]) seg(ctx, s * 16, 8 + dy * 0.4, s * 34, 4 + dy * 1.4, 1, INK);
+  }
+  dot(ctx, 0, 7, 2.2, '#E57A8F');
+  ctx.beginPath(); ctx.moveTo(-9, 12); ctx.quadraticCurveTo(0, 20, 9, 12); ctx.lineWidth = 1.6; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.restore();
+}
+
+function drawGym(gm) {
+  const raid = S.raid && S.raid.gym === gm && S.raid.phase !== 'fled';
+  const T = TEAMS[gm.team] || null;
+  const col = T ? T.color : '#9AA4AC';
+  const x = gm.x, y = gm.y;
+  ell(ctx, x, y + 1, 16, 7); ctx.fillStyle = rgba(col, 0.55); ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = '#FFFFFF'; ctx.stroke();
+  if (gm.pulse > 0) { ell(ctx, x, y + 1, 16 + 26 * (1 - gm.pulse), 7 + 11 * (1 - gm.pulse)); ctx.lineWidth = 3 * gm.pulse; ctx.strokeStyle = col; ctx.stroke(); }
+  if (raid) return;                                         // the raid egg/boss sits on top instead
+  ctx.beginPath(); ctx.moveTo(x - 8, y); ctx.lineTo(x - 5.5, y - 24); ctx.lineTo(x + 5.5, y - 24); ctx.lineTo(x + 8, y); ctx.closePath();
+  const tg = ctx.createLinearGradient(x - 8, 0, x + 8, 0);
+  tg.addColorStop(0, '#FFFFFF'); tg.addColorStop(1, '#C9D3DA');
+  ctx.fillStyle = tg; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.fillStyle = col; ctx.fillRect(x - 6.6, y - 14, 13.2, 4);
+  ell(ctx, x, y - 26, 10, 5); ink(ctx, col, 1.5);
+  const glow = 0.5 + 0.5 * Math.sin(S.time * 4 + x);
+  circ(ctx, x, y - 30, 4 + glow); ctx.fillStyle = lighten(col, 0.5); ctx.fill(); ctx.lineWidth = 1.2; ctx.strokeStyle = INK; ctx.stroke();
+}
+
+function drawStop(st) {
+  const bob = Math.sin(S.time * 2.5 + st.phase) * 1.5;
+  ell(ctx, st.x, st.y + 1, 6, 2.5); ctx.fillStyle = 'rgba(20,50,80,0.3)'; ctx.fill();
+  seg(ctx, st.x, st.y, st.x, st.y - 11, 1.8, '#3C5A7A');
+  const cx = st.x, cy = st.y - 17 + bob, s = 6.2;
+  const purple = st.spun > 0;
+  const cols = purple ? ['#E2B5FF', '#B06BEA', '#8A3FCC'] : ['#9FE5FF', '#34AEEA', '#1A7FC0'];
+  const face = (pts, col) => { ctx.beginPath(); pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); ctx.fillStyle = col; ctx.fill(); };
+  face([[cx, cy - s], [cx + s, cy - s / 2], [cx, cy], [cx - s, cy - s / 2]], cols[0]);
+  face([[cx - s, cy - s / 2], [cx, cy], [cx, cy + s], [cx - s, cy + s / 2]], cols[1]);
+  face([[cx + s, cy - s / 2], [cx, cy], [cx, cy + s], [cx + s, cy + s / 2]], cols[2]);
+  ctx.beginPath(); ctx.moveTo(cx, cy - s); ctx.lineTo(cx + s, cy - s / 2); ctx.lineTo(cx + s, cy + s / 2); ctx.lineTo(cx, cy + s);
+  ctx.lineTo(cx - s, cy + s / 2); ctx.lineTo(cx - s, cy - s / 2); ctx.closePath();
+  ctx.lineWidth = 1.2; ctx.strokeStyle = INK; ctx.stroke();
+}
+
+function drawLure() {
+  const Lr = S.lure;
+  if (!Lr) return;
+  const k = Math.min(1, Lr.t / 0.4) * Math.min(1, (Lr.dur - Lr.t) / 0.5);
+  ctx.save();
+  ctx.globalAlpha = 0.35 * k;
+  const gl = ctx.createRadialGradient(Lr.x, Lr.y - 14, 0, Lr.x, Lr.y - 14, 60);
+  gl.addColorStop(0, '#FF9AD2'); gl.addColorStop(1, 'rgba(255,154,210,0)');
+  ctx.fillStyle = gl; circ(ctx, Lr.x, Lr.y - 14, 60); ctx.fill();
+  ctx.globalAlpha = k;
+  for (let i = 0; i < 10; i++) {                         // petals orbiting the PokéStop
+    const a = S.time * 1.6 + i * TAU / 10, rr = 22 + 6 * Math.sin(S.time * 3 + i);
+    ctx.save(); ctx.translate(Lr.x + Math.cos(a) * rr, Lr.y - 14 + Math.sin(a) * rr * 0.7); ctx.rotate(a * 2);
+    ell(ctx, 0, 0, 4.5, 2.4); ctx.fillStyle = i % 2 ? '#FF8CC6' : '#FFC2E2'; ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function drawRaid() {
+  const R = S.raid;
+  if (!R) return;
+  if (R.phase === 'egg') {
+    const wob = Math.sin(R.t * 18) * 0.12 * (0.4 + R.t / TUNING.raidEgg);
+    const pop = easeOutBack(clamp(R.t / 0.35, 0, 1));
+    ctx.save();
+    ctx.globalAlpha = 0.4;
+    const gl = ctx.createRadialGradient(R.x, R.y - 6, 0, R.x, R.y - 6, 50);
+    gl.addColorStop(0, '#FF9AD2'); gl.addColorStop(1, 'rgba(255,154,210,0)');
+    ctx.fillStyle = gl; circ(ctx, R.x, R.y - 6, 50); ctx.fill();
+    ctx.restore();
+    drawRaidEgg(ctx, R.x, R.y - 6, pop, wob);
+    const left = Math.max(1, Math.ceil(TUNING.raidEgg - R.t));
+    ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `900 18px ${GO}`;
+    goText(ctx, String(left), R.x, R.y - 40, '#FFFFFF', '#C2307E', 5, 0);
+    ctx.restore();
+    return;
+  }
+  const k = R.phase === 'boss' ? easeOutBack(clamp(R.t / 0.4, 0, 1)) : clamp(1 - R.t / 0.5, 0, 1);
+  if (k <= 0) return;
+  const sh = R.shake > 0 ? rand(-2, 2) : 0;
+  const sp = getSprite('snorlax', R.r);
+  ctx.save();
+  ctx.translate(R.x + sh, R.y);
+  ctx.globalAlpha = 0.4;
+  circ(ctx, 0, 0, R.r + 10); ctx.fillStyle = '#F06BC8'; ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.scale(k, k);
+  ctx.drawImage(sp.canvas, -sp.size / 2, -sp.size / 2, sp.size, sp.size);
+  ctx.restore();
+  if (R.phase !== 'boss') return;
+  // HP bar, colored by who's dealt the damage
+  const w = 58, x0 = R.x - w / 2, y0 = R.y - R.r - 18;
+  roundRect(ctx, x0 - 2, y0 - 2, w + 4, 10, 5); ctx.fillStyle = INK; ctx.fill();
+  roundRect(ctx, x0, y0, w, 6, 3); ctx.fillStyle = '#FFFFFF'; ctx.fill();
+  let x = x0 + w * Math.max(0, R.hp) / TUNING.raidHP;
+  ctx.fillStyle = '#5FD68A'; ctx.fillRect(x0, y0, x - x0, 6);
+  for (let t = 0; t < 3; t++) {
+    const dw = w * R.dmg[t] / TUNING.raidHP;
+    ctx.fillStyle = TEAMS[t].color; ctx.fillRect(x, y0, Math.min(dw, x0 + w - x), 6); x += dw;
+  }
+  const timeLeft = 1 - R.t / TUNING.raidDur;                 // little timer ring
+  ctx.beginPath(); ctx.arc(R.x + w / 2 + 10, y0 + 3, 6, -Math.PI / 2, -Math.PI / 2 + TAU * Math.max(0, timeLeft));
+  ctx.lineWidth = 2.5; ctx.strokeStyle = '#F06BC8'; ctx.stroke();
+}
+
+function drawBall(b) {
+  const T = TEAMS[b.team];
+  let k = b.age < 0.35 ? easeOutBack(b.age / 0.35) : 1;
+  if (b.stolen) k *= 1 - 0.6 * clamp(b.stolen.t, 0, 1);
+  if (k <= 0) return;
+  const r = b.r * k;
+  if (!b.stolen) { ell(ctx, b.x + 2, b.y + 3.5, r + 1, (r + 1) * 0.8); ctx.fillStyle = 'rgba(15,35,25,0.28)'; ctx.fill(); }
+  if (S.weather && S.weather.team === b.team) {             // boosted: glowing aura
+    circ(ctx, b.x, b.y, r + 5 + Math.sin(S.time * 12 + b.x) * 1.5);
+    ctx.fillStyle = rgba(T.light, 0.55); ctx.fill();
+  }
+  circ(ctx, b.x, b.y, r + 2.8); ctx.fillStyle = INK; ctx.fill();
+  circ(ctx, b.x, b.y, r + 1.8); ctx.fillStyle = T.color; ctx.fill();
+  const sp = getSprite(b.id, b.r);
+  ctx.drawImage(sp.canvas, b.x - sp.size / 2 * k, b.y - sp.size / 2 * k, sp.size * k, sp.size * k);
+  if (b.stolen) {                                          // Team Rocket's net
+    ctx.save(); ctx.globalAlpha = 0.8; ctx.strokeStyle = '#2A2A35'; ctx.lineWidth = 1;
+    circ(ctx, b.x, b.y, r + 3); ctx.stroke();
+    for (let a = 0; a < 4; a++) { const an = a * Math.PI / 4; seg(ctx, b.x - Math.cos(an) * (r + 3), b.y - Math.sin(an) * (r + 3), b.x + Math.cos(an) * (r + 3), b.y + Math.sin(an) * (r + 3), 1, '#2A2A35'); }
+    ctx.restore();
+  }
+}
+
+function drawWeather() {
+  const W = S.weather;
+  if (!W) return;
+  const k = Math.min(1, W.t / 0.5) * Math.min(1, (W.dur - W.t) / 0.6);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, MW, MH); ctx.clip();
+  if (W.kind === 'rain') {
+    ctx.fillStyle = `rgba(40,90,170,${0.12 * k})`; ctx.fillRect(0, 0, MW, MH);
+    ctx.strokeStyle = `rgba(220,240,255,${0.55 * k})`; ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (let i = 0; i < 70; i++) {
+      const x = ((i * 97.3 + S.time * 160) % (MW + 60)) - 30, y = ((i * 53.7 + S.time * 620) % (MH + 40)) - 20;
+      ctx.moveTo(x, y); ctx.lineTo(x - 4, y + 13);
+    }
+    ctx.stroke();
+  } else if (W.kind === 'sun') {
+    const gl = ctx.createRadialGradient(MW, 0, 10, MW, 0, 420);
+    gl.addColorStop(0, `rgba(255,236,150,${0.5 * k})`); gl.addColorStop(1, 'rgba(255,200,80,0)');
+    ctx.fillStyle = gl; ctx.fillRect(0, 0, MW, MH);
+    ctx.fillStyle = `rgba(255,240,180,${0.13 * k})`;
+    for (let i = 0; i < 5; i++) {
+      const a = 1.75 + i * 0.22 + Math.sin(S.time * 0.8 + i) * 0.04;
+      ctx.beginPath(); ctx.moveTo(MW, 0); ctx.lineTo(MW + Math.cos(a) * 800, Math.sin(a) * 800); ctx.lineTo(MW + Math.cos(a + 0.07) * 800, Math.sin(a + 0.07) * 800); ctx.closePath(); ctx.fill();
+    }
+  } else {
+    ctx.fillStyle = `rgba(30,25,60,${0.22 * k})`; ctx.fillRect(0, 0, MW, MH);
+  }
+  ctx.restore();
+  if (S.bolt) {                                              // lightning strike
+    const b = S.bolt, rnd = seeded(Math.floor(b.seed) + 1);
+    ctx.save(); ctx.globalAlpha = clamp(b.life / 0.3, 0, 1);
+    ctx.beginPath(); ctx.moveTo(b.x + (rnd() - 0.5) * 60, -10);
+    for (let k2 = 1; k2 <= 8; k2++) ctx.lineTo(b.x + (rnd() - 0.5) * 40 * (1 - k2 / 9), lerp(-10, b.y, k2 / 8));
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 7; ctx.strokeStyle = 'rgba(255,230,90,0.6)'; ctx.stroke();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = '#FFFFFF'; ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawFx() {
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const f of S.fx) {
+    const t = 1 - f.life / f.max;      // 0 → 1 over the effect's life
+    if (f.kind === 'ring') {
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = f.color;
+      ctx.lineWidth = f.width * (1 - t) + 1;
+      ctx.beginPath(); ctx.arc(f.x, f.y, Math.max(0, f.r0 + (f.r1 - f.r0) * easeOut(t)), 0, TAU); ctx.stroke();
+    } else if (f.kind === 'spark') {
+      ctx.globalAlpha = 1 - t;
+      ctx.fillStyle = f.color;
+      circ(ctx, f.x, f.y, f.size * (1 - t * 0.5)); ctx.fill();
+    } else if (f.kind === 'zap') {
+      ctx.globalAlpha = 1 - t;
+      ctx.save(); ctx.translate(f.x, f.y); ctx.rotate(f.ang);
+      ctx.beginPath(); ctx.moveTo(-5, -3); ctx.lineTo(0, 1); ctx.lineTo(-1, -1); ctx.lineTo(5, 3);
+      ctx.lineWidth = 2; ctx.strokeStyle = f.color; ctx.stroke();
+      ctx.restore();
+    } else if (f.kind === 'confetti') {
+      ctx.globalAlpha = t < 0.85 ? 1 : (1 - t) / 0.15;
+      ctx.save(); ctx.translate(f.x, f.y); ctx.rotate(f.a);
+      ctx.fillStyle = f.color; ctx.fillRect(-f.size / 2, -f.size / 4, f.size, f.size / 2);
+      ctx.restore();
+    } else if (f.kind === 'egg') {                           // a wild Pokémon is about to pop out
+      ctx.globalAlpha = 1;
+      const wob = Math.sin(S.time * 20) * 0.2, pop = easeOutBack(clamp(t * 4, 0, 1));
+      ctx.save(); ctx.translate(f.x, f.y); ctx.rotate(wob); ctx.scale(pop, pop);
+      circ(ctx, 0, 0, 13); ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fill();
+      drawPokeball(ctx, 0, 0, 8);
+      ctx.restore();
+    }
+  }
+  for (const f of S.fx) {
+    if (f.kind !== 'float') continue;
+    const t = 1 - f.life / f.max;
+    const pop = t < 0.12 ? 0.5 + 0.5 * easeOutBack(t / 0.12) : 1;
+    ctx.globalAlpha = t < 0.75 ? 1 : (1 - t) / 0.25;
+    const y = f.y - 26 * easeOut(t), x = clamp(f.x, 100, MW - 100);
+    fitFont(ctx, f.text, 300, f.size * pop, 900);
+    goText(ctx, f.text, x, y, '#FFFFFF', f.color, 5, 2);
+  }
+  ctx.restore();
+}
+
+// The team score bar: three colored segments sized by how much each team owns.
+function drawScoreBar() {
+  const x0 = 18, x1 = 522, y = L.stripY, h = 32, W = x1 - x0;
+  ctx.save();
+  roundRect(ctx, x0 - 3, y - h / 2 - 3 + 3, W + 6, h + 6, (h + 6) / 2); ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fill();
+  roundRect(ctx, x0 - 3, y - h / 2 - 3, W + 6, h + 6, (h + 6) / 2); ctx.fillStyle = '#FFFFFF'; ctx.fill();
+  ctx.save();
+  roundRect(ctx, x0, y - h / 2, W, h, h / 2); ctx.clip();
+  const tot = S.shown[0] + S.shown[1] + S.shown[2] || 1;
+  let x = x0;
+  const segs = [];
+  for (let t = 0; t < 3; t++) {
+    const w = W * S.shown[t] / tot;
+    const gr = ctx.createLinearGradient(0, y - h / 2, 0, y + h / 2);
+    gr.addColorStop(0, lighten(TEAMS[t].color, 0.25)); gr.addColorStop(1, TEAMS[t].color);
+    ctx.fillStyle = gr; ctx.fillRect(x, y - h / 2, w + 0.5, h);
+    segs.push([x, w]);
+    x += w;
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.fillRect(x0, y - h / 2, W, h * 0.35);
+  ctx.restore();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const lead = S.timeUp ? S.winner : leader();
+  for (let t = 0; t < 3; t++) {
+    const [sx, w] = segs[t], pct = Math.round(share(t) * 100);
+    let label = `${TEAMS[t].name} ${pct}%`;
+    ctx.font = `900 16px ${GO}`;
+    if (ctx.measureText(label).width > w - 38) label = `${pct}%`;
+    const cx = sx + w / 2 + (w > 60 ? 9 : 0);
+    fitFont(ctx, label, Math.max(20, w - 34), 17, 900);
+    const ex = cx - ctx.measureText(label).width / 2 - 13;
+    if (w > 60) drawEmblem(ctx, t, ex, y, 9.5);
+    goText(ctx, label, cx, y + 1, '#FFFFFF', TEAMS[t].dark, 4, 0);
+    if (t === lead) drawCrown(w > 60 ? ex : sx + w / 2, y - 15, 0.75);   // crown on the leader
+  }
+  ctx.restore();
+}
+
+function drawCrown(x, y, k) {
+  ctx.save();
+  ctx.translate(x, y); ctx.scale(k, k);
+  ctx.beginPath();
+  ctx.moveTo(-9, 4); ctx.lineTo(-9, -4); ctx.lineTo(-4.5, 0); ctx.lineTo(0, -6); ctx.lineTo(4.5, 0); ctx.lineTo(9, -4); ctx.lineTo(9, 4);
+  ctx.closePath();
+  ctx.fillStyle = '#FFD23F'; ctx.fill();
+  ctx.lineWidth = 1.8; ctx.lineJoin = 'round'; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.restore();
+}
+
+// Round countdown (left pill) and the weather (right pill), Pokémon GO style.
+function drawHud() {
+  const secs = Math.max(0, Math.ceil(S.clock));
+  const text = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  const urgent = !S.timeUp && S.clock <= 10;
+  const pulse = urgent ? 1 + 0.12 * Math.pow(S.clock - Math.floor(S.clock), 3) : 1;
+  const pill = (x, w, color) => {
+    roundRect(ctx, x - w / 2, L.hudY - 18 + 3, w, 36, 18); ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fill();
+    roundRect(ctx, x - w / 2, L.hudY - 18, w, 36, 18); ctx.fillStyle = color; ctx.fill();
+  };
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.save();
+  ctx.translate(64, L.hudY); ctx.scale(pulse, pulse); ctx.translate(-64, -L.hudY);
+  pill(64, 100, urgent || S.timeUp ? '#E63946' : '#FFFFFF');
+  circ(ctx, 34, L.hudY, 9); ctx.lineWidth = 2.4; ctx.strokeStyle = urgent || S.timeUp ? '#FFFFFF' : '#39C4B6'; ctx.stroke();
+  seg(ctx, 34, L.hudY, 34, L.hudY - 5, 2, ctx.strokeStyle); seg(ctx, 34, L.hudY, 38, L.hudY + 1, 2, ctx.strokeStyle);
+  ctx.font = `900 22px ${GO}`;
+  ctx.fillStyle = urgent || S.timeUp ? '#FFFFFF' : UI_TEXT;
+  ctx.fillText(text, 74, L.hudY + 1);
+  ctx.restore();
+  const kind = S.weather ? S.weather.kind : 'clear';
+  pill(474, 104, '#FFFFFF');
+  drawWeatherIcon(ctx, kind, 444, L.hudY - 1, 0.95);
+  ctx.font = `900 14px ${GO}`;
+  ctx.fillStyle = S.weather ? TEAMS[S.weather.team].dark : UI_TEXT;
+  ctx.fillText(WEATHERS[kind].label, 490, L.hudY + 1);
+  ctx.restore();
+}
+
+// In-game style notification card that drops in at the top of the map.
+function drawNote() {
+  const N = S.note;
+  if (!N) return;
+  const age = N.max - N.life;
+  const inT = clamp(age / 0.25, 0, 1), outT = clamp(N.life / 0.3, 0, 1);
+  const w = 420, h = 58, x = L.mapCX, y = L.mapY + 38 - 24 * (1 - easeOutBack(inT));
+  ctx.save();
+  ctx.globalAlpha = Math.min(inT * 1.5, outT);
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.3)'; ctx.shadowBlur = blur(10); ctx.shadowOffsetY = 3 * scale;
+  roundRect(ctx, x - w / 2, y - h / 2, w, h, 22); ctx.fillStyle = 'rgba(255,255,255,0.97)'; ctx.fill();
+  ctx.restore();
+  roundRect(ctx, x - w / 2, y - h / 2, 8, h, 4); ctx.fillStyle = N.color; ctx.fill();
+  const ix = x - w / 2 + 40;
+  circ(ctx, ix, y, 23); ctx.fillStyle = rgba(N.color, 0.16); ctx.fill();
+  ctx.save(); ctx.translate(ix, y); N.icon(ctx); ctx.restore();
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  fitFont(ctx, N.title, w - 90, 23, 900);
+  ctx.fillStyle = UI_TEXT; ctx.fillText(N.title, ix + 34, y - 9);
+  fitFont(ctx, N.sub, w - 90, 15, 700);
+  ctx.fillStyle = '#6E8A94'; ctx.fillText(N.sub, ix + 34, y + 14);
+  ctx.restore();
+}
+
+// The winner card at 0:00.
+function drawBanner() {
+  const B = S.banner;
+  if (!B) return;
+  const T = TEAMS[B.team];
+  const pop = 0.3 + 0.7 * easeOutBack(clamp(B.age / 0.3, 0, 1));
+  const w = 420, h = 214, x = L.mapCX, y = L.mapY + MH * 0.47;
+  ctx.save();
+  ctx.translate(x, y); ctx.scale(pop, pop);
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.4)'; ctx.shadowBlur = blur(18); ctx.shadowOffsetY = 5 * scale;
+  roundRect(ctx, -w / 2, -h / 2, w, h, 30); ctx.fillStyle = '#FFFFFF'; ctx.fill();
+  ctx.restore();
+  ctx.save();
+  roundRect(ctx, -w / 2, -h / 2, w, h, 30); ctx.clip();
+  const hg = ctx.createLinearGradient(0, -h / 2, 0, -h / 2 + 96);
+  hg.addColorStop(0, lighten(T.color, 0.2)); hg.addColorStop(1, T.color);
+  ctx.fillStyle = hg; ctx.fillRect(-w / 2, -h / 2, w, 96);
+  ctx.restore();
+  // rays behind the emblem
+  ctx.save();
+  ctx.translate(0, -h / 2 + 4); ctx.rotate(S.time * 0.4);
+  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  for (let i = 0; i < 12; i++) { ctx.rotate(TAU / 12); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-10, -90); ctx.lineTo(10, -90); ctx.closePath(); ctx.fill(); }
+  ctx.restore();
+  drawEmblem(ctx, B.team, 0, -h / 2 + 4, 34);
+  drawCrown(0, -h / 2 - 38, 2);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  fitFont(ctx, `TEAM ${T.name}`, w - 40, 40, 900);
+  goText(ctx, `TEAM ${T.name}`, 0, -h / 2 + 64, '#FFFFFF', T.dark, 8, 3);
+  fitFont(ctx, 'TAKES OVER THE MAP!', w - 50, 24, 900);
+  ctx.fillStyle = UI_TEXT; ctx.fillText('TAKES OVER THE MAP!', 0, -h / 2 + 118);
+  // final percentages
+  const order = [0, 1, 2].sort((a, b) => B.shares[b] - B.shares[a]);
+  order.forEach((t, i) => {
+    const bx = -w / 2 + 40 + i * ((w - 80) / 3) + (w - 80) / 6, by = h / 2 - 44;
+    drawEmblem(ctx, t, bx - 34, by, 14);
+    ctx.font = `900 ${i === 0 ? 30 : 24}px ${GO}`;
+    ctx.fillStyle = TEAMS[t].color;
+    ctx.textAlign = 'left';
+    ctx.lineWidth = 3; ctx.strokeStyle = TEAMS[t].dark; ctx.strokeText(`${Math.round(B.shares[t] * 100)}%`, bx - 16, by + 1);
+    ctx.fillText(`${Math.round(B.shares[t] * 100)}%`, bx - 16, by + 1);
+  });
+  ctx.restore();
+}
+
+function draw() {
+  if (!canvas.width || !canvas.height || !backdrop.width) return;   // page not laid out yet
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(backdrop, 0, 0);
+  const sx = S.shake ? rand(-1, 1) * S.shake : 0, sy = S.shake ? rand(-1, 1) * S.shake : 0;
+
+  // The map (clipped to its frame), in map units
+  ctx.setTransform(scale, 0, 0, scale, (MAP_X + sx) * scale, (L.mapY + sy) * scale);
+  ctx.save();
+  roundRect(ctx, 0, 0, MW, MH, 6); ctx.clip();
+  drawTerritory();
+  drawWeather();
+  drawLure();
+  for (const gm of S.gyms) drawGym(gm);
+  for (const st of S.stops) drawStop(st);
+  drawRaid();
+  for (const b of S.balls) if (!b.stolen) drawBall(b);
+  ctx.restore();
+
+  // Things in the air may cross the frame (but not the hook)
+  ctx.save();
+  ctx.beginPath(); ctx.rect(-MAP_X, L.stripY + 20 - L.mapY, LW, L.panelBottom - L.stripY - 20); ctx.clip();
+  for (const b of S.balls) if (b.stolen) drawBall(b);
+  for (const bm of S.bombs) {                              // falling Rocket bombs
+    const p = clamp(bm.t / bm.dur, 0, 1), sz = lerp(1.7, 1, p);
+    ell(ctx, bm.x, bm.y, 6 * p + 2, 3 * p + 1); ctx.fillStyle = 'rgba(15,20,25,0.35)'; ctx.fill();
+    ctx.save(); ctx.translate(bm.x, bm.y - 40 * (1 - p)); ctx.scale(sz, sz);
+    circ(ctx, 0, 0, 6); ink(ctx, '#2A2A35', 1.4);
+    drawRocketR(ctx, 0, 0.5, 0.28);
+    ctx.restore();
+  }
+  if (S.rocket) drawRocket(S.rocket);
+  for (const B of S.birds) drawBird(B);
+  drawFx();
+  ctx.restore();
+
+  // HUD, score bar, notifications (unshaken)
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  drawScoreBar();
+  drawHud();
+  drawNote();
+  if (S.flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${S.flash})`;
+    ctx.fillRect(-20, -20, LW + 40, LH + 40);
+  }
+  drawBanner();
+
+  // Black bands (drawn last, unshaken, so nothing spills into TikTok's UI zones)
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, LW, L.panelTop);
+  ctx.fillRect(0, L.panelBottom, LW, LH - L.panelBottom);
+}
+
+/* =====================================================================
+   VIDEO RECORDING
+   Records one full round straight from the canvas (1080×1920, 60fps, with
+   sound), keeps going a few seconds into the freeze, then saves the file.
+   ===================================================================== */
+
+const params = new URLSearchParams(location.search);
+// ?upload=/path  → POST the finished video to this same-origin path instead of
+// downloading it (used by tools/render.py). ?autorecord → start on load.
+const UPLOAD_PATH = /^\/(?!\/)/.test(params.get('upload') || '') ? params.get('upload') : null;
+
+const Recorder = {
+  on: false, rec: null, chunks: [], tail: 0, startedAt: 0, frames: 0,
+  TAIL_SECONDS: 3.5,        // how long to keep filming the frozen end screen
+
+  // Best format this browser can record: MP4 (H.264/AAC) first, WebM fallback.
+  pickMime() {
+    const types = [
+      'video/mp4;codecs=avc1.64002A,mp4a.40.2',
+      'video/mp4;codecs=avc1,mp4a.40.2',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+    return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  },
+
+  start() {
+    if (this.on) return;
+    if (!window.MediaRecorder || !canvas.captureStream) {
+      alert("This browser can't record video. Try Chrome or Safari on a computer.");
+      return;
+    }
+    Sound.unlock();
+    this.on = true;
+    resize();                 // lock the canvas to 1080×1920
+    startRound();
+    draw();
+
+    const stream = canvas.captureStream(60);
+    const audio = Sound.recordStream();
+    if (audio) audio.getAudioTracks().forEach(t => stream.addTrack(t));
+
+    const mimeType = this.pickMime();
+    const opts = { videoBitsPerSecond: 8_000_000, audioBitsPerSecond: 192_000 };
+    if (mimeType) opts.mimeType = mimeType;
+    this.rec = new MediaRecorder(stream, opts);
+    this.chunks = [];
+    this.rec.ondataavailable = e => { if (e.data.size) this.chunks.push(e.data); };
+    this.rec.onstop = () => this.save();
+    this.rec.start(1000);
+
+    this.tail = this.TAIL_SECONDS;
+    this.startedAt = performance.now();
+    this.frames = 0;
+    $('recBtn').classList.add('on');
+    $('recBtn').textContent = '⏹';
+    $('recBadge').hidden = false;
+  },
+
+  // Called every frame once the round is over: film the freeze, then stop.
+  tick(rdt) {
+    if (!this.rec) return;
+    this.tail -= rdt;
+    if (this.tail <= 0) this.stop();
+  },
+
+  stop() {
+    if (this.rec && this.rec.state !== 'inactive') this.rec.stop();
+  },
+
+  save() {
+    const type = this.rec.mimeType || 'video/webm';
+    const blob = new Blob(this.chunks, { type });
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const name = `pokemon-go-team-war-${stamp}.${ext}`;
+    const secs = (performance.now() - this.startedAt) / 1000;
+    const fps = (this.frames / secs).toFixed(1);
+
+    this.rec = null;
+    this.chunks = [];
+    this.on = false;
+    resize();                 // back to the normal screen layout
+    $('recBtn').classList.remove('on');
+    $('recBtn').textContent = '⏺';
+    $('recBadge').hidden = true;
+
+    if (UPLOAD_PATH) {
+      fetch(`${UPLOAD_PATH}?name=${encodeURIComponent(name)}&fps=${fps}`, { method: 'POST', body: blob });
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  },
+
+  // On-screen REC badge with elapsed time.
+  frame() {
+    if (!this.on) return;
+    this.frames++;
+    const s = Math.floor((performance.now() - this.startedAt) / 1000);
+    const text = `● REC ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    const badge = $('recBadge');
+    if (badge.textContent !== text) badge.textContent = text;
+  },
+};
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+
+$('recBtn').addEventListener('click', () => (Recorder.on ? Recorder.stop() : Recorder.start()));
+
+// Tap the map: a wild Pokémon appears there and joins whoever owns that spot
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (S.timeUp) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width * LW - MAP_X;
+  const y = (e.clientY - rect.top) / rect.height * LH - L.mapY;
+  if (x < 0 || y < 0 || x > MW || y > MH) return;
+  const t = grid[cellAt(x, y)];
+  if (t !== NEUTRAL) addBall(t, x, y);
+});
+
+// Audio starts on load if the browser allows it. If it's blocked, any touch,
+// click or key press starts it (different browsers count different events).
+for (const ev of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) {
+  window.addEventListener(ev, () => Sound.unlock(), { capture: true });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Sound.unlock(); });
+
+const muteBtn = $('muteBtn');
+function toggleMute() {
+  Sound.setMuted(!Sound.muted);
+  muteBtn.textContent = Sound.muted ? '🔇' : '🔊';
+}
+muteBtn.addEventListener('click', toggleMute);
+
+const panel = $('panel');
+$('setBtn').addEventListener('click', () => { panel.hidden = !panel.hidden; });
+$('closeBtn').addEventListener('click', () => { panel.hidden = true; });
+$('resetBtn').addEventListener('click', () => { startRound(); panel.hidden = true; });
+
+// Bind a slider to a Settings key with a formatted readout
+function bindSlider(inputId, labelId, key, fmtVal) {
+  const input = $(inputId), label = $(labelId);
+  input.value = Settings[key];
+  label.textContent = fmtVal(Settings[key]);
+  input.addEventListener('input', () => {
+    Settings[key] = parseFloat(input.value);
+    label.textContent = fmtVal(Settings[key]);
+  });
+}
+bindSlider('inSpeed', 'vSpeed', 'speed', v => v.toFixed(2) + '×');
+bindSlider('inStart', 'vStart', 'start', v => String(v));
+
+// Keyboard shortcuts for desktop recording: M = mute, R = restart the round
+window.addEventListener('keydown', e => {
+  if (e.key === 'm' || e.key === 'M') toggleMute();
+  if (e.key === 'r' || e.key === 'R') startRound();
+});
+
+window.addEventListener('resize', resize);
+
+/* =====================================================================
+   MAIN LOOP
+   ===================================================================== */
+
+resize();
+startRound();
+Sound.unlock();     // try to start sound right away
+if (params.has('autorecord')) Recorder.start();
+
+let lastT = performance.now();
+function frame(now) {
+  // Never negative (the first rAF timestamp can be earlier than lastT), capped after tab switches
+  const rdt = clamp((now - lastT) / 1000, 0, 1 / 20);
+  lastT = now;
+  try {
+    update(rdt);
+    draw();
+  } catch (err) {
+    console.error(err);     // log it (render.py prints these) but keep the loop alive
+  }
+  Recorder.frame();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
